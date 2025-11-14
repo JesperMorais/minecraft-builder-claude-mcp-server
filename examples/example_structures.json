@@ -1,0 +1,67 @@
+{
+  "examples": [
+    {
+      "name": "simple_platform",
+      "description": "A 3x3 stone platform",
+      "blocks": [
+        {"x": 0, "y": 0, "z": 0, "block_type": "stone"},
+        {"x": 1, "y": 0, "z": 0, "block_type": "stone"},
+        {"x": 2, "y": 0, "z": 0, "block_type": "stone"},
+        {"x": 0, "y": 0, "z": 1, "block_type": "stone"},
+        {"x": 1, "y": 0, "z": 1, "block_type": "stone"},
+        {"x": 2, "y": 0, "z": 1, "block_type": "stone"},
+        {"x": 0, "y": 0, "z": 2, "block_type": "stone"},
+        {"x": 1, "y": 0, "z": 2, "block_type": "stone"},
+        {"x": 2, "y": 0, "z": 2, "block_type": "stone"}
+      ]
+    },
+    {
+      "name": "tiny_house",
+      "description": "A minimal wooden house frame",
+      "blocks": [
+        {"x": 0, "y": 0, "z": 0, "block_type": "oak_planks"},
+        {"x": 1, "y": 0, "z": 0, "block_type": "oak_planks"},
+        {"x": 2, "y": 0, "z": 0, "block_type": "oak_planks"},
+        {"x": 0, "y": 0, "z": 2, "block_type": "oak_planks"},
+        {"x": 1, "y": 0, "z": 2, "block_type": "oak_planks"},
+        {"x": 2, "y": 0, "z": 2, "block_type": "oak_planks"},
+        {"x": 0, "y": 1, "z": 0, "block_type": "oak_planks"},
+        {"x": 2, "y": 1, "z": 0, "block_type": "oak_planks"},
+        {"x": 0, "y": 1, "z": 2, "block_type": "oak_planks"},
+        {"x": 2, "y": 1, "z": 2, "block_type": "oak_planks"},
+        {"x": 0, "y": 2, "z": 0, "block_type": "oak_planks"},
+        {"x": 1, "y": 2, "z": 0, "block_type": "oak_planks"},
+        {"x": 2, "y": 2, "z": 0, "block_type": "oak_planks"},
+        {"x": 0, "y": 2, "z": 2, "block_type": "oak_planks"},
+        {"x": 1, "y": 2, "z": 2, "block_type": "oak_planks"},
+        {"x": 2, "y": 2, "z": 2, "block_type": "oak_planks"}
+      ]
+    },
+    {
+      "name": "tower",
+      "description": "A simple 2x2 stone tower, 5 blocks tall",
+      "blocks": [
+        {"x": 0, "y": 0, "z": 0, "block_type": "cobblestone"},
+        {"x": 1, "y": 0, "z": 0, "block_type": "cobblestone"},
+        {"x": 0, "y": 0, "z": 1, "block_type": "cobblestone"},
+        {"x": 1, "y": 0, "z": 1, "block_type": "cobblestone"},
+        {"x": 0, "y": 1, "z": 0, "block_type": "cobblestone"},
+        {"x": 1, "y": 1, "z": 0, "block_type": "cobblestone"},
+        {"x": 0, "y": 1, "z": 1, "block_type": "cobblestone"},
+        {"x": 1, "y": 1, "z": 1, "block_type": "cobblestone"},
+        {"x": 0, "y": 2, "z": 0, "block_type": "cobblestone"},
+        {"x": 1, "y": 2, "z": 0, "block_type": "cobblestone"},
+        {"x": 0, "y": 2, "z": 1, "block_type": "cobblestone"},
+        {"x": 1, "y": 2, "z": 1, "block_type": "cobblestone"},
+        {"x": 0, "y": 3, "z": 0, "block_type": "cobblestone"},
+        {"x": 1, "y": 3, "z": 0, "block_type": "cobblestone"},
+        {"x": 0, "y": 3, "z": 1, "block_type": "cobblestone"},
+        {"x": 1, "y": 3, "z": 1, "block_type": "cobblestone"},
+        {"x": 0, "y": 4, "z": 0, "block_type": "cobblestone"},
+        {"x": 1, "y": 4, "z": 0, "block_type": "cobblestone"},
+        {"x": 0, "y": 4, "z": 1, "block_type": "cobblestone"},
+        {"x": 1, "y": 4, "z": 1, "block_type": "cobblestone"}
+      ]
+    }
+  ]
+}
