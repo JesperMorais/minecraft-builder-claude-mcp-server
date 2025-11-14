@@ -2,11 +2,11 @@
 name = "minecraft-builder-mcp"
 version = "0.1.0"
 description = "MCP server for generating Minecraft structures from natural language using Claude"
-authors = [{name = "Your Name"}]
+authors = [{name = "josh"}]
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=0.9.0",
-    "nbtlib>=2.0.0",
+    "mcschematic>=11.0.0",
     "pydantic>=2.0.0",
 ]
 
