@@ -20,8 +20,10 @@ from .paths import (
 )
 from .versions import (
     DEFAULT_VERSION,
-    SUPPORTED_VERSIONS,
+    LATEST_VERSION,
+    explain_unknown,
     normalize_version,
+    supported_versions,
     validate_block_ids,
 )
 
@@ -64,9 +66,8 @@ def _format_block_warnings(unknown: dict, mc_version: str) -> str:
         return ""
     lines = [f"\n⚠️  **Unrecognised block IDs for {mc_version}** "
              "(built anyway — check these if the import looks wrong):"]
-    for block_id, suggestions in unknown.items():
-        hint = f" — did you mean: {', '.join(suggestions)}?" if suggestions else ""
-        lines.append(f"- `{block_id}`{hint}")
+    for block_id in unknown:
+        lines.append(f"- `{block_id}` — {explain_unknown(block_id, mc_version)}")
     lines.append("")
     return "\n".join(lines)
 
@@ -145,8 +146,15 @@ Before calling this tool, ask the user where they would like to save the .schem 
                     },
                     "mc_version": {
                         "type": "string",
-                        "enum": sorted(SUPPORTED_VERSIONS),
-                        "description": "Target Minecraft version for the .schem. Defaults to " + DEFAULT_VERSION + "."
+                        # Registry order, not string order — "1.21.10" sorts before "1.21.2".
+                        "enum": list(supported_versions()),
+                        "description": (
+                            "Target Minecraft version for the .schem. Defaults to "
+                            + DEFAULT_VERSION + "; newest available is " + LATEST_VERSION
+                            + ". Block IDs are validated against the chosen version, and "
+                            "newer versions unlock newer blocks — see the style guide's "
+                            "version table."
+                        )
                     },
                     "strict": {
                         "type": "boolean",

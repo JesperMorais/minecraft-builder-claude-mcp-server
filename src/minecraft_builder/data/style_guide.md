@@ -232,6 +232,60 @@ paste. Use that:
 
 ---
 
+## 9. Version awareness
+
+A palette that is perfect on 1.19.4 can fail outright on 1.21.9. The target is
+set by `mc_version` (default 1.19.4), and every block is validated against that
+version's registry — but validation only catches what you got wrong, so pick
+deliberately.
+
+### Renamed blocks — the trap
+
+These IDs were replaced, not just deprecated. Using the old one on a newer
+version fails, and vice versa.
+
+| Old ID | New ID | Renamed in |
+|---|---|---|
+| `chain` | `iron_chain` | 1.21.9 |
+| `grass` | `short_grass` | 1.20.3 |
+| `grass_path` | `dirt_path` | 1.17 |
+
+Palettes in this guide target the 1.19.4 default. On **1.21.9 or newer, swap
+`chain` for `iron_chain`.**
+
+### What each version gives you to build with
+
+Only building-relevant additions are listed.
+
+| Version | Notable new building blocks |
+|---|---|
+| 1.19.3 | `bamboo_planks`, `bamboo_mosaic`, `bamboo_door`, `chiseled_bookshelf` |
+| 1.19.4 | `cherry_planks`, `cherry_log`, `cherry_leaves`, `pink_petals`, `decorated_pot` |
+| 1.20.3 | The full **copper build set** — `copper_bulb`, `copper_grate`, `copper_door`, `chiseled_copper`, plus **tuff**: `tuff_bricks`, `polished_tuff`, `chiseled_tuff` |
+| 1.20.5 | `vault`, `heavy_core` |
+| 1.21.3 | **Pale oak** — `pale_oak_planks`, `pale_oak_log`, `pale_moss_block`, `pale_hanging_moss`, `creaking_heart` |
+| 1.21.4 | **Resin** — `resin_bricks`, `resin_block`, `chiseled_resin_bricks` |
+| 1.21.5 | Ground cover — `leaf_litter`, `wildflowers`, `bush`, `firefly_bush`, `short_dry_grass` |
+| 1.21.9 | **Copper lighting and shelves** — `copper_lantern`, `copper_torch`, `copper_bars`, `copper_chain`, `copper_golem_statue`, and `*_shelf` for every wood |
+| 26.1 | `golden_dandelion` |
+| 26.2 | **Sulfur and cinnabar** stone families — `cinnabar_bricks`, `polished_cinnabar`, `sulfur_bricks`, `polished_sulfur`, `chiseled_sulfur` |
+
+Two upgrades worth targeting a newer version for:
+
+- **1.20.3+** gives copper and tuff, which fill the biggest gap in the vanilla
+  palette: mid-tone warm metal and neutral grey-brown stone. `polished_tuff` and
+  `chiseled_copper` slot straight into the medieval and industrial palettes.
+- **1.21.9+** finally gives *coloured light* — `copper_lantern` and `copper_torch`
+  are warmer than iron lanterns, and `copper_bars` beat `iron_bars` for windows
+  in any warm-toned build.
+
+> Anything numbered **26.x** is provisional: the upstream registry this server
+> vendors stops at 1.21.11, so those block lists come from the wiki and may be
+> incomplete. They validate leniently — an unrecognised block warns rather than
+> fails.
+
+---
+
 ## Op cookbook
 
 Recipes for the techniques above using only the current op set.

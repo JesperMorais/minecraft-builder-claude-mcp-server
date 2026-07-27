@@ -109,9 +109,10 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 - Accepts shape `operations` (cuboid, sphere, cylinder, ...) and/or explicit `blocks`
 - Supports direct JSON input for small/medium structures
 - Supports file-based input for large structures (see LARGE_STRUCTURE_GUIDE.md)
-- `mc_version` selects the target version (`1.19.4`, `1.20.4`, `1.21.4`; default `1.19.4`)
-- Block IDs are validated against that version; unknown vanilla blocks are
-  reported with "did you mean" suggestions (set `strict: true` to fail instead)
+- `mc_version` selects the target version — any release from `1.13` to `26.2`
+  (default `1.19.4`); see [Version support](#version-support)
+- Block IDs are validated against that version; unknown blocks are diagnosed as
+  a typo, too-new, or renamed (set `strict: true` to fail instead of warn)
 
 **open_output_folder** - Opens the output location in the OS file manager
 - Works on Windows (Explorer), macOS (Finder), and Linux (xdg-open)
@@ -146,9 +147,51 @@ Two mechanisms handle that:
   anti-patterns, and a pre-flight checklist.
 
 The guide is **tested, not just written**: `tests/test_style.py` validates every
-block ID it mentions against all three supported version registries, and builds
-every cookbook recipe through the real conversion pipeline. A palette that goes
-stale or a recipe that stops working fails CI.
+block ID it mentions against each version registry in the guide's target range,
+builds every cookbook recipe through the real conversion pipeline, and checks the
+guide's version tables against the block index. A palette that goes stale, a
+recipe that stops working, or a wrong version claim fails CI.
+
+## Version support
+
+Any release from **1.13** (the flattening) to **26.2** can be targeted via
+`mc_version`; the default is `1.19.4`. Newer versions unlock newer blocks —
+copper and tuff in 1.20.3, pale oak in 1.21.3, resin in 1.21.4, copper lighting
+and shelves in 1.21.9, sulfur and cinnabar in 26.2.
+
+Blocks are tracked as **version spans** (added-in, removed-after) in
+[`data/block_versions.tsv`](src/minecraft_builder/data/block_versions.tsv) —
+1200 blocks across 46 releases in one file. Spans matter because five blocks were
+*renamed*, not merely added, so a first-seen version alone would mark them valid
+forever:
+
+| Old ID | New ID | Renamed in |
+|---|---|---|
+| `chain` | `iron_chain` | 1.21.9 |
+| `grass` | `short_grass` | 1.20.3 |
+| `grass_path` | `dirt_path` | 1.17 |
+| `sign` | `oak_sign` | 1.14 |
+| `wall_sign` | `oak_wall_sign` | 1.14 |
+
+Validation uses this to diagnose rather than just reject:
+
+```
+- `copper_lantern` — added in 1.21.9 — target that version or newer to use it
+- `chain` — renamed to `iron_chain` after 1.21.8
+- `oak_plank` — did you mean: oak_planks, pale_oak_planks, dark_oak_planks?
+```
+
+Two caveats:
+
+- **`mcschematic`'s version enum stops at 1.21.5.** Its `save()` only reads
+  `version.value`, so newer releases are targeted by supplying the `DataVersion`
+  directly. The schematic is written correctly; whether your WorldEdit build
+  accepts it is a separate question.
+- **`26.x` block lists are provisional.** Minecraft moved to a year-based scheme
+  and the upstream registry (PrismarineJS) stops at 1.21.11, so 26.1/26.2 blocks
+  come from the wiki and may be incomplete.
+
+Regenerate the index with `python scripts/regen_block_data.py` (idempotent).
 
 ### Importing into Minecraft
 
@@ -230,7 +273,8 @@ Still supported for scattered detail a shape can't express:
 ## Compatibility
 
 - Schematic format: Sponge Schematic v2
-- Selectable target versions: 1.19.4 (default), 1.20.4, 1.21.4 (via `mc_version`)
+- Selectable target versions: any release from 1.13 to 26.2 (default 1.19.4) via
+  `mc_version` — see [Version support](#version-support)
 - WorldEdit 7.x required for import
 
 ## Project Structure
@@ -248,7 +292,10 @@ minecraft-builder-claude-mcp-server/
 │   ├── paths.py             # Path resolution and file-manager opening
 │   └── data/
 │       ├── style_guide.md   # The build style guide
-│       └── blocks_*.txt     # Vendored per-version block registries
+│       ├── block_versions.tsv  # Block -> version span index (1200 blocks)
+│       └── mc_versions.json    # Releases + their NBT DataVersion
+├── scripts/
+│   └── regen_block_data.py  # Rebuilds the block/version index
 ├── tests/
 ├── examples/
 │   ├── example_structures.json

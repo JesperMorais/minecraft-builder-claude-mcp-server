@@ -24,4 +24,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-minecraft_builder = ["data/*.txt", "data/*.md"]
+minecraft_builder = ["data/*.tsv", "data/*.json", "data/*.md"]

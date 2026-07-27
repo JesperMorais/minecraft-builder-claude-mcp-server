@@ -30,9 +30,25 @@ NON_BLOCK_TOKENS = frozenset({
 BLOCK_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\[[a-z0-9_=,]+\])?$")
 
 
-def _block_ids_in_guide() -> set[str]:
-    """Every plausible block ID referenced in the guide."""
+# The palettes target the mc_version default and hold until `chain` was renamed
+# to `iron_chain`. Newer releases are covered by the guide's own version tables,
+# which test_version_tables_match_the_registry checks instead.
+GUIDE_BASELINE_RANGE = ("1.19.4", "1.21.8")
+
+VERSION_SECTION = "## 9. Version awareness"
+
+
+def _guide_without_version_section() -> str:
+    """The guide minus the section that deliberately cites other versions' blocks."""
     text = load_style_guide()
+    head, sep, tail = text.partition(VERSION_SECTION)
+    assert sep, "version-awareness section heading moved or was renamed"
+    return head + tail.partition("## Op cookbook")[2]
+
+
+def _block_ids_in_guide() -> set[str]:
+    """Every plausible block ID referenced in the guide, outside section 9."""
+    text = _guide_without_version_section()
     candidates = set(re.findall(r"`([^`\n]+)`", text))
     candidates |= set(
         re.findall(r'"(?:block|from_block|to_block)"\s*:\s*"([^"]+)"', text)
@@ -65,10 +81,53 @@ def test_guide_block_ids_are_valid():
     )
 
 
-@pytest.mark.parametrize("version", sorted(versions.SUPPORTED_VERSIONS))
-def test_guide_block_ids_valid_on_every_version(version):
+def _versions_between(low: str, high: str) -> list[str]:
+    order = versions.supported_versions()
+    return list(order[order.index(low):order.index(high) + 1])
+
+
+@pytest.mark.parametrize("version", _versions_between(*GUIDE_BASELINE_RANGE))
+def test_guide_block_ids_valid_across_baseline_range(version):
     unknown = versions.validate_block_ids(sorted(_block_ids_in_guide()), version)
     assert not unknown, f"invalid for {version}: {', '.join(unknown)}"
+
+
+def test_version_tables_match_the_registry():
+    """The guide's rename and additions tables must agree with the block index.
+
+    This is what stops the version guidance drifting: every claim is checked
+    against the same data the validator uses.
+    """
+    section = load_style_guide().partition(VERSION_SECTION)[2].partition("## Op cookbook")[0]
+    order = versions.supported_versions()
+
+    renames = re.findall(r"^\| `(\w+)` \| `(\w+)` \| ([\d.]+) \|", section, re.M)
+    assert len(renames) >= 3, f"rename table not parsed, got {renames}"
+    for old, new, in_version in renames:
+        old_span, new_span = versions.block_span(old), versions.block_span(new)
+        assert old_span and new_span, f"{old}/{new} missing from the index"
+        assert new_span.added == in_version, (
+            f"{new} is recorded as added in {new_span.added}, guide claims {in_version}"
+        )
+        previous = order[order.index(in_version) - 1]
+        assert old_span.removed_after == previous, (
+            f"{old} is recorded as removed after {old_span.removed_after}, "
+            f"guide implies {previous}"
+        )
+
+    # Additions table: every block listed on a row must have been added then.
+    rows = re.findall(r"^\| ([\d.]+) \| (.+) \|$", section, re.M)
+    assert len(rows) >= 9, f"additions table not parsed, got {len(rows)} rows"
+    checked = 0
+    for version, cell in rows:
+        for block in re.findall(r"`(\w+)`", cell):
+            span = versions.block_span(block)
+            assert span, f"{block} (row {version}) is not a known block"
+            assert span.added == version, (
+                f"{block} was added in {span.added}, guide lists it under {version}"
+            )
+            checked += 1
+    assert checked >= 40, f"only {checked} additions checked"
 
 
 def _cookbook_recipes() -> list[list[dict]]:
