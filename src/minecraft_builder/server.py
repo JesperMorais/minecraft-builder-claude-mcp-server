@@ -30,6 +30,7 @@ from .web import STATE as viewer_state
 from .web import ensure_running as start_viewer
 from .web.channel import BRIDGE as channel_bridge
 from .web.chat import CHAT as viewer_chat
+from .web.prompts import PROMPTS as viewer_prompts
 
 # Added to Claude's system prompt when this server is loaded. It is the only
 # place Claude learns what a <channel> event from the viewer means and how to
@@ -52,10 +53,25 @@ When you handle one:
 
 Prefer shape operations over per-block lists. Only write files (.schem /
 .litematic) when the user asks for one; showing a build saves nothing to disk.
+
+Channels are a gated research preview and are often unavailable (org policy,
+Bedrock/Vertex/Foundry, or no startup flag). The same chat then works by
+polling: when the user wants to drive builds from the browser, call
+await_prompt to wait for their next message, handle it exactly as above
+(show_structure, then reply), and call await_prompt again. Keep the loop going
+— a timeout round just means the user is thinking; only stop when they tell you
+to in the terminal.
 """
 
 # Initialize MCP server
 app = Server("minecraft-builder", instructions=CHANNEL_INSTRUCTIONS)
+
+# await_prompt wait bounds, in seconds. The ceiling stays comfortably under the
+# 600s client timeout in .mcp.json so a full wait returns a result instead of
+# the client killing the call.
+DEFAULT_AWAIT_SECONDS = 240.0
+MAX_AWAIT_SECONDS = 540.0
+MIN_AWAIT_SECONDS = 5.0
 
 
 def _log(message: str) -> None:
@@ -326,6 +342,40 @@ Keep it to a sentence or two; the build itself is shown with show_structure.""",
             }
         ),
         Tool(
+            name="await_prompt",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2IwOGRmZiIgZD0iTTEyIDJhMTAgMTAgMCAxMDAgMjAgMTAgMTAgMCAwMDAtMjB6bTEgNWgtMnY2bDUgMyAxLTEuNy00LTIuM3oiLz48L3N2Zz4=", mimeType="image/svg+xml")],
+            description="""Waits for the next prompt typed into the build viewer's chat and returns it.
+
+This is the chat path that works WITHOUT channels — no startup flag, no org
+policy, works on Bedrock. Use it whenever the user wants to drive builds from
+the browser and channel events are not arriving.
+
+Run it as a loop:
+1. Call await_prompt. It blocks until the user types in the viewer (or times out).
+2. Handle the returned prompt like any build request: show_structure for builds,
+   then reply with a short answer — the user is watching the browser, not the
+   terminal.
+3. Call await_prompt again to keep listening.
+
+A timeout is not an error — the user is just thinking. Call it again. Stop the
+loop only when the user asks you to in the terminal. Prompts typed while you were
+building are queued and returned by the next call, oldest first. Starts the
+viewer if it is not already running.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timeout_seconds": {
+                        "type": "number",
+                        "description": (
+                            "How long to wait before giving this round up. "
+                            "Default 240, clamped to 5-540 (the ceiling keeps a "
+                            "full wait inside the MCP client's own timeout)."
+                        )
+                    }
+                }
+            }
+        ),
+        Tool(
             name="show_structure",
             icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzdmYjNmZiIgZD0iTTEyIDJsOSA1LjJ2OS42TDEyIDIyIDMgMTYuOFY3LjJMMTIgMnoiLz48cGF0aCBmaWxsPSIjNGE4MmQ2IiBkPSJNMTIgMTJsOS00Ljh2OS42TDEyIDIyeiIvPjwvc3ZnPg==", mimeType="image/svg+xml")],
             description="""Displays a structure in a 3D viewer in the user's browser.
@@ -376,6 +426,39 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         except Exception as e:
             _log(f"preview_structure failed: {traceback.format_exc()}")
             return [TextContent(type="text", text=f"❌ Error previewing structure: {type(e).__name__}: {str(e)}")]
+
+    if name == "await_prompt":
+        import asyncio
+
+        try:
+            timeout = float(arguments.get("timeout_seconds") or DEFAULT_AWAIT_SECONDS)
+        except (TypeError, ValueError):
+            timeout = DEFAULT_AWAIT_SECONDS
+        timeout = max(MIN_AWAIT_SECONDS, min(timeout, MAX_AWAIT_SECONDS))
+
+        # Make sure there is a page for the user to type into, and that its
+        # status dot flips to "listening" for the duration of the wait.
+        url = start_viewer()
+        prompt = await asyncio.get_running_loop().run_in_executor(
+            None, viewer_prompts.take, timeout
+        )
+        if prompt is None:
+            return [TextContent(
+                type="text",
+                text=(
+                    f"No prompt arrived within {timeout:.0f}s. The viewer is at "
+                    f"{url}. Call await_prompt again to keep listening — a quiet "
+                    "round is not an error."
+                ),
+            )]
+        return [TextContent(
+            type="text",
+            text=(
+                f"Prompt from the viewer:\n\n{prompt['text']}\n\n"
+                "Handle it (show_structure for builds), answer with the reply "
+                "tool, then call await_prompt again to keep listening."
+            ),
+        )]
 
     if name == "reply":
         text = str(arguments.get("text") or "").strip()

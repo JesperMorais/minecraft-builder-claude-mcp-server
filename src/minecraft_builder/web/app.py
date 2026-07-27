@@ -21,6 +21,7 @@ from typing import Optional, Tuple
 
 from .channel import BRIDGE
 from .chat import CHAT
+from .prompts import PROMPTS
 from .state import STATE
 
 HOST = "127.0.0.1"
@@ -86,11 +87,16 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/status":
-            # Drives the page's diagnostics. "attached" is the one that matters:
-            # false means no Claude session is listening, which is what a
-            # missing --dangerously-load-development-channels looks like.
+            # Drives the page's diagnostics. "waiting" is the strongest signal —
+            # an await_prompt call is blocked right now, so delivery is certain.
+            # "attached" only means an MCP session exists; with channels blocked
+            # by org policy its pushes are silently dropped, so it is a weaker
+            # claim than it looks.
             self._send_json({
                 "attached": BRIDGE.attached,
+                "waiting": PROMPTS.listening,
+                "polling": PROMPTS.active(),
+                "queued": PROMPTS.pending,
                 "events_sent": BRIDGE.sent,
                 "viewers": CHAT.bus.subscriber_count,
                 "version": STATE.version,
@@ -140,17 +146,24 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         # Push first, then record, so the transcript entry carries the real
-        # delivery outcome rather than an optimistic guess.
-        delivered = BRIDGE.push(text, {"chat_id": "web", "sender": "viewer"})
+        # delivery outcome rather than an optimistic guess. A prompt the channel
+        # accepted is NOT queued as well — that would deliver it twice to a
+        # session using both mechanisms.
+        pushed = BRIDGE.push(text, {"chat_id": "web", "sender": "viewer"})
+        delivered = pushed or PROMPTS.active()
         message = CHAT.from_user(text, delivered=delivered)
+        if not pushed:
+            PROMPTS.put({"id": message["id"], "text": text})
         if not delivered:
             # The flag ends the message with no trailing punctuation on purpose:
             # this line gets copy-pasted, and a sentence period lands inside the
             # server name, which Claude Code reports as "no MCP server configured
             # with that name" — a confusing second failure on top of the first.
             CHAT.note(
-                "That prompt was not delivered: no Claude session is listening. "
-                "Restart Claude Code from the project root with this flag:\n"
+                "That prompt was queued, but nothing is collecting prompts right "
+                "now. Either ask Claude in the terminal to listen with its "
+                "await_prompt tool (works everywhere, no flag needed), or restart "
+                "Claude Code from the project root with this flag:\n"
                 "--dangerously-load-development-channels server:minecraft-builder"
             )
         self._send_json({"delivered": delivered, "message": message})
@@ -215,6 +228,8 @@ def _sse_snapshot() -> str:
             "messages": CHAT.history(),
             "version": STATE.version,
             "attached": BRIDGE.attached,
+            "waiting": PROMPTS.listening,
+            "polling": PROMPTS.active(),
         })
         + "\n\n"
     )

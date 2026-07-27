@@ -17,7 +17,8 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
 - **3D viewer in your browser** — see the build as it is generated, and watch it
   change as you ask for revisions (see [3D viewer](#3d-viewer))
 - **Chat from the viewer** — type a build request in the browser and it reaches
-  your Claude Code session, with replies coming back in the same window (see
+  your Claude Code session, with replies coming back in the same window. Works
+  via plain polling (no flags, no org permission) or via channels (see
   [Chatting from the viewer](#chatting-from-the-viewer))
 - WorldEdit-compatible `.schem` and Litematica-native `.litematic` output, so a
   build can be pasted instantly *or* built by hand in survival against a
@@ -148,8 +149,14 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 
 **reply** - Sends a message back to the viewer's chat
 - Used when a prompt arrived from the browser rather than the terminal
-- Only meaningful with channels enabled (see
+- Pairs with either chat mode (see
   [Chatting from the viewer](#chatting-from-the-viewer))
+
+**await_prompt** - Waits for the next prompt typed in the viewer's chat
+- Long-polls the prompt queue (default 240 s per call) and returns the oldest
+  pending prompt; Claude calls it in a loop to keep listening
+- This is the chat path that needs **no flag and no org permission** — see
+  [Chatting from the viewer](#chatting-from-the-viewer)
 
 **open_output_folder** - Opens the output location in the OS file manager
 - Works on Windows (Explorer), macOS (Finder), and Linux (xdg-open)
@@ -302,7 +309,22 @@ The viewer has a chat box. Anything you type there is delivered to the Claude Co
 session the MCP server is attached to, and Claude's answers come back in the same
 box — so you can drive a build entirely from the browser while watching it change.
 
-This uses Claude Code **channels**, which are a research preview, so it needs two
+Two delivery mechanisms exist, and the browser needs no configuration for either:
+
+| Mode | How prompts reach Claude | Needs |
+|---|---|---|
+| **Polling** | Claude calls the `await_prompt` tool in a loop | Nothing — works everywhere |
+| **Channels** | The server pushes events into the session | Research-preview flag + org permission |
+
+**Polling (recommended):** just tell Claude, in the terminal, something like
+*"listen to the viewer"* or *"wait for prompts from the browser"*. Claude calls
+`await_prompt`, which blocks until you type in the browser, handles the prompt,
+replies, and calls it again. No startup flag, no admin approval, and it works on
+Bedrock/Vertex/Foundry too. The trade-off: the terminal session is occupied by
+the listening loop while it runs, and each wait round is a tool call.
+
+**Channels** push prompts into the session instead, so Claude stays free between
+messages. They are a research preview, so they need two
 things: the server registered under that exact name, and a session started with
 the channel enabled.
 
@@ -332,21 +354,27 @@ Requirements and limits, all imposed by the preview:
 - Custom channels are not on Anthropic's approved list, so the
   `--dangerously-load-development-channels` flag is required rather than
   `--channels`. Neither flag appears in `claude --help`.
-- On a Team or Enterprise plan an admin must enable channels first.
+- On a Team or Enterprise plan, channels are **blocked by default** and the flag
+  reports `blocked by org policy` at startup. An org Owner can enable them at
+  claude.ai → Admin settings → Claude Code by setting `channelsEnabled: true`
+  in managed settings. A local `managed-settings.json` cannot override this —
+  server-delivered policy wins. If you can't (or don't want to) change org
+  policy, use polling instead; that is exactly what it is for.
 
 **Everything else keeps working without the flag.** Start Claude Code normally and
-all the tools behave as documented; you just get no chat box, and prompts typed in
-the browser report that nothing is listening. The dot in the chat header shows
-which state you are in:
+all the tools behave as documented — including polling-mode chat. The dot in the
+chat header shows which state you are in:
 
 | Dot | Meaning |
 |---|---|
-| green | A Claude session is attached; prompts will reach it |
-| red | No session listening — started without the flag, or Claude Code has exited |
+| green — "Claude is listening" | An `await_prompt` call is waiting right now; delivery is certain |
+| green — "connected to Claude" | An MCP session exists; channel prompts *should* reach it |
+| red | Nothing is listening — no session, or the loop has stopped |
 
-The reason the page has to say this explicitly: channel events are **not
-acknowledged**. A session without the channel enabled discards them silently, so
-"nothing happened" is otherwise indistinguishable from "Claude is thinking".
+The distinction matters because channel events are **not acknowledged**: a
+session with channels blocked or disabled discards them silently, so "connected"
+is a weaker claim than "listening". Prompts typed while nobody collects them are
+queued (up to 64) and handed over when the next `await_prompt` call arrives.
 
 ## JSON Structure Format
 
@@ -441,6 +469,7 @@ minecraft-builder-claude-mcp-server/
 │   │   ├── state.py         # Current structure + version history
 │   │   ├── payload.py       # Compact JSON for the browser
 │   │   ├── channel.py       # Pushes browser prompts into the session
+│   │   ├── prompts.py       # Prompt queue for polling mode (await_prompt)
 │   │   ├── chat.py          # Transcript + SSE event bus
 │   │   ├── __main__.py      # Run the viewer standalone
 │   │   └── static/          # index.html, viewer.js, style.css
@@ -473,7 +502,10 @@ minecraft-builder-claude-mcp-server/
 
 **Chat box says "no Claude session listening":**
 
-Channel events are unacknowledged, so every cause looks identical from the
+The quickest fix is to skip channels entirely: tell Claude in the terminal to
+*"listen to the viewer"* — it calls `await_prompt` and the dot flips to
+"Claude is listening". If you specifically want channel delivery instead,
+channel events are unacknowledged, so every cause looks identical from the
 browser. Work through it in this order:
 
 1. **Is the server registered?** `claude mcp list` must show `minecraft-builder`
