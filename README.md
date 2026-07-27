@@ -14,7 +14,9 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
   looking designed rather than merely valid — palettes, depth, proportion,
   roof pitch, lighting (see [Build quality](#build-quality))
 - MCP integration for Claude Desktop and Claude Code
-- WorldEdit-compatible `.schem` file generation
+- WorldEdit-compatible `.schem` and Litematica-native `.litematic` output, so a
+  build can be pasted instantly *or* built by hand in survival against a
+  hologram (see [Importing into Minecraft](#importing-into-minecraft))
 - Support for block states (e.g. `oak_log[axis=y]`) and negative coordinates
 - Automatic folder opening in the OS file manager (Windows/macOS/Linux)
 - Support for structures from simple platforms to complex buildings
@@ -106,10 +108,12 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 
 ### Tools Available
 
-**create_minecraft_structure** - Converts structure definitions to .schem files
+**create_minecraft_structure** - Converts structure definitions to schematic files
 - Accepts shape `operations` (cuboid, sphere, cylinder, ...) and/or explicit `blocks`
 - Supports direct JSON input for small/medium structures
 - Supports file-based input for large structures (see LARGE_STRUCTURE_GUIDE.md)
+- `output_formats` selects which files to write: `schem` (WorldEdit),
+  `litematic` (Litematica), or both. Defaults to `["schem"]`
 - `mc_version` selects the target version — any release from `1.13` to `26.2`
   (default `1.19.4`); see [Version support](#version-support)
 - Block IDs are validated against that version; unknown blocks are diagnosed as
@@ -196,7 +200,15 @@ Regenerate the index with `python scripts/regen_block_data.py` (idempotent).
 
 ### Importing into Minecraft
 
-The generated `.schem` files work with **WorldEdit**:
+Two formats are available, chosen with `output_formats` (defaults to `["schem"]`).
+Which one you want depends on how you intend to build:
+
+| You want to… | Format | Mod |
+|---|---|---|
+| Drop the finished build into the world instantly | `schem` | WorldEdit |
+| Build it yourself in survival, following a hologram | `litematic` | Litematica |
+
+**WorldEdit (`.schem`)** — needs creative mode or operator rights:
 
 1. Copy the `.schem` file to your WorldEdit schematics folder:
    - Server: `[world]/plugins/WorldEdit/schematics/`
@@ -207,6 +219,17 @@ The generated `.schem` files work with **WorldEdit**:
    //schem load <filename>
    //paste
    ```
+
+**Litematica (`.litematic`)** — works in survival:
+
+1. Copy the `.litematic` file to `.minecraft/schematics/`
+2. Open the Litematica menu (`M` by default), load the schematic and create a
+   **placement**. The build appears as a translucent hologram you construct
+   block by block.
+3. `Material List` lists every block you need to gather.
+
+Litematica can also load `.schem` on 1.17+, but that path is a stopgap in the
+mod and is absent on 1.13–1.16, so prefer `litematic` when you want a blueprint.
 
 Alternatively, use **MCEdit**, **Amulet Editor**, or other schematic tools.
 
@@ -277,10 +300,10 @@ Still supported for scattered detail a shape can't express:
 
 ## Compatibility
 
-- Schematic format: Sponge Schematic v2
+- Schematic formats: Sponge Schematic v2 (`.schem`), Litematica (`.litematic`)
 - Selectable target versions: any release from 1.13 to 26.2 (default 1.19.4) via
   `mc_version` — see [Version support](#version-support)
-- WorldEdit 7.x required for import
+- WorldEdit 7.x required to import `.schem`; Litematica to import `.litematic`
 
 ## Project Structure
 
@@ -366,13 +389,15 @@ mypy src/minecraft_builder
 ## Dependencies
 
 - **mcp** (>=0.9.0) - MCP Python SDK
-- **mcschematic** (>=11.0.0) - Minecraft schematic file handling
+- **mcschematic** (>=11.0.0) - `.schem` (Sponge Schematic v2) writing
+- **litemapy** (>=0.11.0b0,<0.12) - `.litematic` (Litematica) writing
 - **pydantic** (>=2.0.0) - Data validation
 
 ## Contributing
 
 Contributions welcome:
-- Additional output formats (.nbt, .litematic)
+- Additional output formats (`.nbt` vanilla structure blocks; `.schem` and
+  `.litematic` are supported)
 - NBT data / block-entity support (chests, signs)
 - More shape primitives — an `arch`, a `roof` op, and a `stairs` helper
   (these need block-state `[facing=]`/`[half=]` handling to look right)

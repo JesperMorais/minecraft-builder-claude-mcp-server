@@ -9,14 +9,14 @@ from mcp.server import Server
 from mcp.types import Icon, TextContent, Tool
 from pydantic import ValidationError
 
-from .converter import SchematicConverter
+from .converter import DEFAULT_FORMATS, OUTPUT_FORMATS, SchematicConverter
 from .paths import (
     open_in_file_manager,
     resolve_input_path,
     resolve_output_directory,
 )
 from .preview import render_preview, stats_summary
-from .schema import MinecraftStructure
+from .schema import MinecraftStructure, StructureTooLargeError
 from .style import STYLE_CHECKLIST, load_style_guide
 from .versions import (
     DEFAULT_VERSION,
@@ -69,6 +69,26 @@ def _format_block_warnings(unknown: dict, mc_version: str) -> str:
         lines.append(f"- `{block_id}` — {explain_unknown(block_id, mc_version)}")
     lines.append("")
     return "\n".join(lines)
+
+
+def _import_instructions(written: dict, stem: str) -> str:
+    """Per-format instructions for getting the written files into the game."""
+    lines = []
+    if "schem" in written:
+        lines.append(
+            f"- **WorldEdit** (instant paste, needs creative/op): copy the .schem to "
+            f"`plugins/WorldEdit/schematics/` (server) or "
+            f"`.minecraft/config/worldedit/schematics/` (client), then "
+            f"`//schem load {stem}` and `//paste`."
+        )
+    if "litematic" in written:
+        lines.append(
+            f"- **Litematica** (hologram to build by hand in survival): copy the "
+            f"`.litematic` to `.minecraft/schematics/`, then open the Litematica menu "
+            f"(`M` by default), load `{stem}` and create a placement. `Material List` "
+            f"shows everything you need to gather."
+        )
+    return "\n".join(lines) + "\n"
 
 
 @app.list_tools()
@@ -146,6 +166,17 @@ Before calling this tool, ask the user where they would like to save the .schem 
                     "output_filename": {
                         "type": "string",
                         "description": "Optional custom filename (without extension). Defaults to the structure's name field."
+                    },
+                    "output_formats": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": sorted(OUTPUT_FORMATS)},
+                        "description": (
+                            "Which file formats to write. Defaults to [\"schem\"]. "
+                            "Use \"schem\" for WorldEdit (instant //paste, needs creative/op). "
+                            "Use \"litematic\" for Litematica, which shows the build as a "
+                            "hologram to construct by hand in survival with a material list. "
+                            "Ask for both if the user hasn't said how they intend to build it."
+                        )
                     },
                     "mc_version": {
                         "type": "string",
@@ -323,25 +354,27 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Resolve output directory (friendly shortcuts + XDG on Linux)
         output_dir = resolve_output_directory(arguments["output_directory"])
 
-        # Determine output filename
-        output_filename = arguments.get("output_filename") or structure.name
-        if not output_filename.endswith(".schem"):
-            output_filename += ".schem"
+        # Filename stem, minus any extension the caller included for us.
+        stem = arguments.get("output_filename") or structure.name
+        for extension in OUTPUT_FORMATS.values():
+            if stem.endswith(extension):
+                stem = stem[: -len(extension)]
+                break
 
-        # Create output directory
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / output_filename
+        formats = arguments.get("output_formats") or list(DEFAULT_FORMATS)
+        written = SchematicConverter.write_formats(
+            structure, output_dir, stem, mc_version, formats
+        )
 
-        # Convert to schematic
-        result_path = SchematicConverter.to_schematic(structure, str(output_path), mc_version)
+        saved = "\n".join(f"- `{fmt}`: {path}" for fmt, path in written.items())
 
         return [
             TextContent(
                 type="text",
                 text=f"""✓ Successfully created Minecraft structure!
 
-📁 **File saved to:**
-{result_path}
+📁 **Files saved:**
+{saved}
 
 📊 **Structure Info:**
 - Name: {structure.name}
@@ -349,8 +382,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 {stats_summary(block_map)}
 {warning_text}
 🎮 **Import to Minecraft:**
-- WorldEdit: `//schem load {output_filename.replace('.schem', '')}`
-
+{_import_instructions(written, stem)}
 💡 **Tip:** I can open this folder in your file manager for you if you'd like!
 """
             )
@@ -375,6 +407,15 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             TextContent(
                 type="text",
                 text=f"❌ Error: Structure validation failed - {str(e)}"
+            )
+        ]
+    except StructureTooLargeError as e:
+        # Refused before expansion allocated anything, so this is recoverable:
+        # the model can fix the coordinates and call again.
+        return [
+            TextContent(
+                type="text",
+                text=f"❌ Error: structure too large - {str(e)}"
             )
         ]
     except ValueError as e:

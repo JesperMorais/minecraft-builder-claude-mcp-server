@@ -25,6 +25,20 @@ Vec3 = Annotated[List[int], Field(min_length=3, max_length=3)]
 # The running block map an operation reads from and writes to.
 BlockMap = Dict[Tuple[int, int, int], str]
 
+# coord -> index of the operation that last wrote it. See expand_with_provenance.
+Provenance = Dict[Tuple[int, int, int], int]
+
+# Safety ceilings. A structure is refused *before* expansion allocates anything,
+# so a typo like a cuboid from [-100000,...] to [100000,...] fails fast with a
+# readable error instead of exhausting memory in the host process.
+MAX_VOLUME = 2_000_000
+MAX_OPERATIONS = 2_000
+MAX_BLOCKS = 500_000
+
+
+class StructureTooLargeError(ValueError):
+    """A structure exceeds a safety ceiling and was refused before expansion."""
+
 
 def _v3(vec: List[int]) -> Tuple[int, int, int]:
     """A validated Vec3 as a fixed 3-tuple (satisfies the shapes.Coord type)."""
@@ -60,10 +74,25 @@ class StructureSize(BaseModel):
 # Shape operations
 # --------------------------------------------------------------------------- #
 
+def _span(a: int, b: int) -> int:
+    """Inclusive length of the range between two coordinates on one axis."""
+    return abs(b - a) + 1
+
+
 class _Operation(BaseModel):
     """Base class: every operation mutates a shared block map in place."""
 
     def apply(self, blocks: BlockMap) -> None:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+    def volume_bound(self) -> int:  # pragma: no cover - overridden
+        """Upper bound on the coordinates this operation will touch.
+
+        Deliberately an over-estimate of the shape's bounding volume rather than
+        an exact count: it is computed in constant time without generating any
+        coordinates, which is what makes it usable as a pre-flight check. Used
+        only for the safety ceilings, never for sizing the real output.
+        """
         raise NotImplementedError
 
 
@@ -76,6 +105,13 @@ class CuboidOp(_Operation):
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.cuboid(_v3(self.start), _v3(self.end)):
             blocks[c] = self.block
+
+    def volume_bound(self) -> int:
+        return (
+            _span(self.start[0], self.end[0])
+            * _span(self.start[1], self.end[1])
+            * _span(self.start[2], self.end[2])
+        )
 
 
 class HollowBoxOp(_Operation):
@@ -94,6 +130,14 @@ class HollowBoxOp(_Operation):
         ):
             blocks[c] = self.block
 
+    def volume_bound(self) -> int:
+        # The shell is a subset of the solid box, so the box bounds it.
+        return (
+            _span(self.start[0], self.end[0])
+            * _span(self.start[1], self.end[1])
+            * _span(self.start[2], self.end[2])
+        )
+
 
 class SphereOp(_Operation):
     op: Literal["sphere"]
@@ -105,6 +149,9 @@ class SphereOp(_Operation):
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.sphere(_v3(self.center), self.radius, hollow=self.hollow):
             blocks[c] = self.block
+
+    def volume_bound(self) -> int:
+        return (2 * self.radius + 1) ** 3
 
 
 class CylinderOp(_Operation):
@@ -123,6 +170,9 @@ class CylinderOp(_Operation):
         ):
             blocks[c] = self.block
 
+    def volume_bound(self) -> int:
+        return (2 * self.radius + 1) ** 2 * self.height
+
 
 class LineOp(_Operation):
     op: Literal["line"]
@@ -133,6 +183,14 @@ class LineOp(_Operation):
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.line(_v3(self.start), _v3(self.end)):
             blocks[c] = self.block
+
+    def volume_bound(self) -> int:
+        # A 3D line walks the longest axis one voxel at a time.
+        return max(
+            _span(self.start[0], self.end[0]),
+            _span(self.start[1], self.end[1]),
+            _span(self.start[2], self.end[2]),
+        )
 
 
 class PyramidOp(_Operation):
@@ -149,6 +207,10 @@ class PyramidOp(_Operation):
         ):
             blocks[c] = self.block
 
+    def volume_bound(self) -> int:
+        # base+1 layers, none wider than the (2*base+1) square base.
+        return (2 * self.base + 1) ** 2 * (self.base + 1)
+
 
 class DomeOp(_Operation):
     op: Literal["dome"]
@@ -161,6 +223,10 @@ class DomeOp(_Operation):
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.dome(_v3(self.center), self.radius, axis=self.axis, hollow=self.hollow):
             blocks[c] = self.block
+
+    def volume_bound(self) -> int:
+        # Half a sphere: full extent across the two axes it spans, radius+1 deep.
+        return (2 * self.radius + 1) ** 2 * (self.radius + 1)
 
 
 class ConeOp(_Operation):
@@ -176,6 +242,10 @@ class ConeOp(_Operation):
         for c in shapes.cone(_v3(self.center), self.radius, self.height, axis=self.axis, hollow=self.hollow):
             blocks[c] = self.block
 
+    def volume_bound(self) -> int:
+        # Bounded by the cylinder it fits inside.
+        return (2 * self.radius + 1) ** 2 * self.height
+
 
 class EllipsoidOp(_Operation):
     op: Literal["ellipsoid"]
@@ -189,6 +259,9 @@ class EllipsoidOp(_Operation):
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.ellipsoid(_v3(self.center), self.rx, self.ry, self.rz, hollow=self.hollow):
             blocks[c] = self.block
+
+    def volume_bound(self) -> int:
+        return (2 * self.rx + 1) * (2 * self.ry + 1) * (2 * self.rz + 1)
 
 
 class TorusOp(_Operation):
@@ -207,6 +280,12 @@ class TorusOp(_Operation):
         ):
             blocks[c] = self.block
 
+    def volume_bound(self) -> int:
+        # The ring spans (major + minor) either side of centre on the two axes it
+        # lies in, and only the tube radius along its symmetry axis.
+        span = 2 * (self.major_radius + self.minor_radius) + 1
+        return span * span * (2 * self.minor_radius + 1)
+
 
 class BlockOp(_Operation):
     op: Literal["block"]
@@ -215,6 +294,9 @@ class BlockOp(_Operation):
 
     def apply(self, blocks: BlockMap) -> None:
         blocks[_v3(self.pos)] = self.block
+
+    def volume_bound(self) -> int:
+        return 1
 
 
 class ReplaceOp(_Operation):
@@ -230,6 +312,15 @@ class ReplaceOp(_Operation):
             existing = blocks.get(c)
             if existing is not None and _match_key(existing) == target:
                 blocks[c] = self.to_block
+
+    def volume_bound(self) -> int:
+        # Adds no new coordinates, but still walks the whole region, so the
+        # region volume is what bounds the work this operation costs.
+        return (
+            _span(self.start[0], self.end[0])
+            * _span(self.start[1], self.end[1])
+            * _span(self.start[2], self.end[2])
+        )
 
 
 def _match_key(block_id: str) -> str:
@@ -255,6 +346,26 @@ Operation = Annotated[
 ]
 
 
+class _RecordingBlockMap(dict):
+    """A BlockMap that remembers which operation index last wrote each coordinate.
+
+    Every operation writes through ``blocks[coord] = block``, so overriding
+    ``__setitem__`` captures provenance for all of them without touching a single
+    operation class. It has to be recorded at write time: an operation that
+    overwrites a coordinate with an *identical* block ID is invisible to a
+    before/after diff, yet it is still the last writer.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.origin: Provenance = {}
+        self.index = 0  # caller sets this before each operation runs
+
+    def __setitem__(self, key, value) -> None:
+        super().__setitem__(key, value)
+        self.origin[key] = self.index
+
+
 class MinecraftStructure(BaseModel):
     """Complete Minecraft structure definition."""
     name: str = Field(..., description="Name of the structure")
@@ -263,18 +374,80 @@ class MinecraftStructure(BaseModel):
     size: Optional[StructureSize] = Field(None, description="Structure dimensions (auto-calculated)")
     description: Optional[str] = Field(None, description="Optional description of the structure")
 
+    def estimated_volume(self) -> int:
+        """Upper bound on how many coordinates expansion will touch.
+
+        Constant time per operation — no coordinates are generated — so it is
+        safe to call on untrusted input before committing to an expansion.
+        """
+        return len(self.blocks) + sum(op.volume_bound() for op in self.operations)
+
+    def check_limits(
+        self,
+        max_volume: int = MAX_VOLUME,
+        max_operations: int = MAX_OPERATIONS,
+        max_blocks: int = MAX_BLOCKS,
+    ) -> None:
+        """Raise StructureTooLargeError if this structure breaches a ceiling.
+
+        Called by expand() so every consumer is protected at one chokepoint.
+        """
+        if len(self.operations) > max_operations:
+            raise StructureTooLargeError(
+                f"{len(self.operations)} operations exceeds the limit of "
+                f"{max_operations}. Combine overlapping shapes."
+            )
+        if len(self.blocks) > max_blocks:
+            raise StructureTooLargeError(
+                f"{len(self.blocks)} explicit blocks exceeds the limit of "
+                f"{max_blocks}. Use shape operations instead of per-block lists."
+            )
+        volume = self.estimated_volume()
+        if volume > max_volume:
+            raise StructureTooLargeError(
+                f"structure spans up to {volume:,} blocks, over the limit of "
+                f"{max_volume:,}. Check for a coordinate typo (a stray extra "
+                f"digit is the usual cause), or build it in smaller pieces."
+            )
+
     def expand(self) -> BlockMap:
         """Resolve blocks + operations, in order, into a coordinate->block map.
 
         Later placements overwrite earlier ones at the same coordinate, so
         operations can layer (fill a wall, then carve windows with ``air``).
         """
-        block_map: BlockMap = {}
-        for b in self.blocks:
+        return self.expand_with_provenance()[0]
+
+    def expand_with_provenance(self) -> Tuple[BlockMap, Provenance]:
+        """Resolve as expand() does, also returning each coordinate's last writer.
+
+        The provenance map turns a click in a 3D viewer into "operation #4, the
+        roof pyramid" instead of a bare coordinate, which is what makes feedback
+        on a build actionable.
+
+        Index space: explicit ``blocks`` occupy ``0..len(blocks)-1``, then
+        ``operations`` continue from there, matching the order they are applied.
+        """
+        self.check_limits()
+        block_map = _RecordingBlockMap()
+        for i, b in enumerate(self.blocks):
+            block_map.index = i
             block_map[(b.x, b.y, b.z)] = b.block_type
-        for operation in self.operations:
+        offset = len(self.blocks)
+        for j, operation in enumerate(self.operations):
+            block_map.index = offset + j
             operation.apply(block_map)
-        return block_map
+        return dict(block_map), block_map.origin
+
+    def describe_operation(self, index: int) -> str:
+        """One-line label for an operation index, for use in feedback and UIs."""
+        if index < len(self.blocks):
+            b = self.blocks[index]
+            return f"block [{b.x}, {b.y}, {b.z}] = {b.block_type}"
+        op = self.operations[index - len(self.blocks)]
+        fields = op.model_dump(exclude={"op"}, exclude_none=True)
+        joined = " ".join(f"{k}={v}" for k, v in fields.items())
+        return f"{op.op} {joined}"
 
     def calculate_size(self) -> StructureSize:
         """Bounding-box size from the fully expanded block map."""

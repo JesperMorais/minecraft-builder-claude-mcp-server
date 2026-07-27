@@ -9,6 +9,10 @@ dependencies = [
     "mcp>=0.9.0",
     "mcschematic>=11.0.0",
     "pydantic>=2.0.0",
+    # Litematica (.litematic) export. Only a pre-release exists, hence the
+    # explicit beta floor; capped because a silent writer regression in a beta
+    # would produce files that load but build wrong.
+    "litemapy>=0.11.0b0,<0.12",
 ]
 
 [project.optional-dependencies]
