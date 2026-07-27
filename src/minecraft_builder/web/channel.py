@@ -29,14 +29,15 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
-from typing import Dict, Literal, Optional
+from typing import Any, Dict, Final, Literal, Optional
 
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 from pydantic import BaseModel
 
-# The method Claude Code listens for once "claude/channel" is declared.
-CHANNEL_METHOD = "notifications/claude/channel"
+# The method Claude Code listens for once "claude/channel" is declared. Final so
+# it narrows to its literal type, letting it serve as the model default below.
+CHANNEL_METHOD: Final = "notifications/claude/channel"
 
 # Meta keys become attributes on the <channel> tag Claude sees. Claude Code drops
 # keys that are not plain identifiers *silently*, so they are filtered here where
@@ -60,7 +61,9 @@ class ChannelNotification(BaseModel):
     asserted in one place and covered by a test.
     """
 
-    method: Literal[CHANNEL_METHOD] = CHANNEL_METHOD
+    # Spelled out rather than Literal[CHANNEL_METHOD]: Literal takes a literal,
+    # not a name. The test asserts the two agree.
+    method: Literal["notifications/claude/channel"] = CHANNEL_METHOD
     params: ChannelParams
 
 
@@ -117,8 +120,12 @@ class ChannelBridge:
         with self._lock:
             return self._sent
 
-    async def _send(self, frame: JSONRPCNotification) -> None:
-        await self._write_stream.send(SessionMessage(message=JSONRPCMessage(frame)))
+    @staticmethod
+    async def _send(stream: Any, frame: JSONRPCNotification) -> None:
+        """Write one frame. Takes the stream explicitly rather than reading it
+        from ``self``, so a concurrent detach() cannot null it out between the
+        check in push() and the send."""
+        await stream.send(SessionMessage(message=JSONRPCMessage(frame)))
 
     def push(self, content: str, meta: Optional[Dict[str, object]] = None) -> bool:
         """Send a channel event. Returns False if there is nothing to send it to.
@@ -135,7 +142,7 @@ class ChannelBridge:
 
         frame = build_frame(content, clean_meta(meta) if meta else None)
         try:
-            future = asyncio.run_coroutine_threadsafe(self._send(frame), loop)
+            future = asyncio.run_coroutine_threadsafe(self._send(stream, frame), loop)
             future.result(timeout=PUSH_TIMEOUT_SECONDS)
         except Exception:
             # A closed stream or a stopped loop both mean the session is gone.

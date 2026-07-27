@@ -19,7 +19,7 @@ import itertools
 import queue
 import threading
 import time
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List
 
 # Per-connection backlog before the oldest events start being dropped.
 SUBSCRIBER_QUEUE_SIZE = 256

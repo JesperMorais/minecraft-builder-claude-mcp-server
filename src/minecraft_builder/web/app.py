@@ -62,7 +62,9 @@ def _read_static(filename: str) -> bytes:
     Read per request rather than cached: it costs nothing locally and means
     editing the frontend only needs a browser refresh, not a session restart.
     """
-    return resources.files(_STATIC_PACKAGE).joinpath(_STATIC_DIR, filename).read_bytes()
+    # Chained rather than joinpath(dir, name): Traversable.joinpath only took a
+    # single argument before Python 3.11, and this supports 3.10.
+    return resources.files(_STATIC_PACKAGE).joinpath(_STATIC_DIR).joinpath(filename).read_bytes()
 
 
 class _Handler(BaseHTTPRequestHandler):

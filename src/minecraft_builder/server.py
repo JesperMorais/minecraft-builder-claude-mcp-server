@@ -31,7 +31,6 @@ from .web import ensure_running as start_viewer
 from .web.channel import BRIDGE as channel_bridge
 from .web.chat import CHAT as viewer_chat
 
-
 # Added to Claude's system prompt when this server is loaded. It is the only
 # place Claude learns what a <channel> event from the viewer means and how to
 # answer it, so the workflow lives here rather than being re-explained by the

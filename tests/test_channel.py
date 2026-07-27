@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 
 import anyio
-import pytest
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification, JSONRPCRequest
