@@ -294,6 +294,7 @@ minecraft-builder-claude-mcp-server/
 │   ├── converter.py         # JSON to .schem converter
 │   ├── versions.py          # Version support + block-ID validation
 │   ├── style.py             # Style guide loader + compact checklist
+│   ├── preview.py           # ASCII preview + structure stats
 │   ├── paths.py             # Path resolution and file-manager opening
 │   └── data/
 │       ├── style_guide.md   # The build style guide
@@ -353,11 +354,13 @@ python -m minecraft_builder
 
 The server runs in stdio mode for MCP communication.
 
-### Testing
+### Testing and linting
 
 ```bash
 pip install -e ".[dev]"
 pytest
+ruff check src tests
+mypy src/minecraft_builder
 ```
 
 ## Dependencies
@@ -371,8 +374,9 @@ pytest
 Contributions welcome:
 - Additional output formats (.nbt, .litematic)
 - NBT data / block-entity support (chests, signs)
-- More shape primitives (torus, ellipsoid, arch, stairs)
-- Cross-platform folder opening (macOS/Linux)
+- More shape primitives — an `arch`, a `roof` op, and a `stairs` helper
+  (these need block-state `[facing=]`/`[half=]` handling to look right)
+- Transform wrappers (`repeat` / `mirror` / `rotate`)
 - More example structures
 
 ## License
