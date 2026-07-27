@@ -16,6 +16,12 @@ from .paths import (
     resolve_input_path,
     resolve_output_directory,
 )
+from .versions import (
+    DEFAULT_VERSION,
+    SUPPORTED_VERSIONS,
+    normalize_version,
+    validate_block_ids,
+)
 
 
 # Initialize MCP server
@@ -25,6 +31,23 @@ app = Server("minecraft-builder")
 def _log(message: str) -> None:
     """Log to stderr — stdout is reserved for the MCP stdio transport."""
     print(message, file=sys.stderr)
+
+
+def _format_block_warnings(unknown: dict, mc_version: str) -> str:
+    """Render unknown-block warnings (with suggestions) as a message block.
+
+    Returns an empty string when nothing is unknown, so it can be dropped into
+    the success message unconditionally.
+    """
+    if not unknown:
+        return ""
+    lines = [f"\n⚠️  **Unrecognised block IDs for {mc_version}** "
+             "(built anyway — check these if the import looks wrong):"]
+    for block_id, suggestions in unknown.items():
+        hint = f" — did you mean: {', '.join(suggestions)}?" if suggestions else ""
+        lines.append(f"- `{block_id}`{hint}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 @app.list_tools()
@@ -60,7 +83,9 @@ OPERATIONS (each needs an "op" and a "block"):
 - replace:    swap blocks in a region.  {"op":"replace","start":[..],"end":[..],"from_block":"stone","to_block":"air"}
 
 Block IDs may include states, e.g. "oak_log[axis=y]", "oak_stairs[facing=north]".
-The "minecraft:" namespace is added automatically if omitted.
+The "minecraft:" namespace is added automatically if omitted. Block IDs are
+validated against the target version's registry; unknown vanilla blocks produce
+a warning with suggestions (set "strict" to make them an error instead).
 
 Example — a hollow stone hut with a doorway:
 {
@@ -94,6 +119,15 @@ Before calling this tool, ask the user where they would like to save the .schem 
                     "output_filename": {
                         "type": "string",
                         "description": "Optional custom filename (without extension). Defaults to the structure's name field."
+                    },
+                    "mc_version": {
+                        "type": "string",
+                        "enum": sorted(SUPPORTED_VERSIONS),
+                        "description": "Target Minecraft version for the .schem. Defaults to " + DEFAULT_VERSION + "."
+                    },
+                    "strict": {
+                        "type": "boolean",
+                        "description": "If true, unrecognised block IDs cause an error instead of a warning. Default false."
                     }
                 },
                 "required": ["output_directory"]
@@ -187,6 +221,24 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 )
             ]
 
+        # Resolve and validate the target Minecraft version
+        try:
+            mc_version = normalize_version(arguments.get("mc_version") or DEFAULT_VERSION)
+        except ValueError as e:
+            return [TextContent(type="text", text=f"❌ Error: {str(e)}")]
+
+        # Validate block IDs against the version's registry
+        unknown = validate_block_ids(block_map.values(), mc_version)
+        warning_text = _format_block_warnings(unknown, mc_version)
+
+        if unknown and arguments.get("strict"):
+            return [
+                TextContent(
+                    type="text",
+                    text=f"❌ Error: unrecognised block IDs (strict mode)\n{warning_text}"
+                )
+            ]
+
         # Resolve output directory (friendly shortcuts + XDG on Linux)
         output_dir = resolve_output_directory(arguments["output_directory"])
 
@@ -200,15 +252,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         output_path = output_dir / output_filename
 
         # Convert to schematic
-        result_path = SchematicConverter.to_schematic(structure, str(output_path))
+        result_path = SchematicConverter.to_schematic(structure, str(output_path), mc_version)
 
         # Calculate statistics from the fully expanded block map
         block_count = len(block_map)
         size = structure.calculate_size()
         unique_blocks = len(set(block_map.values()))
-
-        # Get just the folder path
-        folder_path = str(output_dir.absolute())
 
         return [
             TextContent(
@@ -220,10 +269,11 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
 📊 **Structure Info:**
 - Name: {structure.name}
+- Target version: {mc_version}
 - Size: {size.width}x{size.height}x{size.length} blocks
 - Total blocks: {block_count}
 - Unique block types: {unique_blocks}
-
+{warning_text}
 🎮 **Import to Minecraft:**
 - WorldEdit: `//schem load {output_filename.replace('.schem', '')}`
 
