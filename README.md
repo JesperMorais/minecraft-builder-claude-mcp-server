@@ -106,6 +106,9 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 - Accepts shape `operations` (cuboid, sphere, cylinder, ...) and/or explicit `blocks`
 - Supports direct JSON input for small/medium structures
 - Supports file-based input for large structures (see LARGE_STRUCTURE_GUIDE.md)
+- `mc_version` selects the target version (`1.19.4`, `1.20.4`, `1.21.4`; default `1.19.4`)
+- Block IDs are validated against that version; unknown vanilla blocks are
+  reported with "did you mean" suggestions (set `strict: true` to fail instead)
 
 **open_output_folder** - Opens the output location in the OS file manager
 - Works on Windows (Explorer), macOS (Finder), and Linux (xdg-open)
@@ -192,7 +195,7 @@ Still supported for scattered detail a shape can't express:
 ## Compatibility
 
 - Schematic format: Sponge Schematic v2
-- Minecraft version: 1.13+ (1.19.4 target)
+- Selectable target versions: 1.19.4 (default), 1.20.4, 1.21.4 (via `mc_version`)
 - WorldEdit 7.x required for import
 
 ## Project Structure
