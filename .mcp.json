@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "minecraft-builder": {
-      "command": "/home/jesper/dev/minecraft-builder-claude-mcp-server/.venv/bin/python",
+      "command": "C:\\Projects\\minecraft-builder-claude-mcp-server\\.venv\\Scripts\\python.exe",
       "args": ["-m", "minecraft_builder"],
       "timeout": 600000
     }
