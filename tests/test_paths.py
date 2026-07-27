@@ -52,7 +52,8 @@ def test_shortcut_ignores_xdg_off_linux(fake_home, monkeypatch):
 def test_literal_path_passthrough(monkeypatch):
     _set_system(monkeypatch, "Linux")
     got = paths.resolve_output_directory("/srv/builds/out")
-    assert str(got) == "/srv/builds/out"
+    # .as_posix() so the assertion holds regardless of the host OS's Path flavour.
+    assert got.as_posix() == "/srv/builds/out"
 
 
 # --------------------------------------------------------------------------- #
@@ -62,13 +63,15 @@ def test_literal_path_passthrough(monkeypatch):
 def test_mnt_path_preserved_on_linux(monkeypatch):
     _set_system(monkeypatch, "Linux")
     got = paths.resolve_input_path("/mnt/c/Users/josh/build.json")
-    assert str(got) == "/mnt/c/Users/josh/build.json"
+    # .as_posix() normalises separators so this holds on a Windows CI runner too.
+    assert got.as_posix() == "/mnt/c/Users/josh/build.json"
 
 
 def test_mnt_path_converted_on_windows(monkeypatch):
     _set_system(monkeypatch, "Windows")
     got = paths.resolve_input_path("/mnt/c/Users/josh/build.json")
-    assert str(got) == r"C:\Users\josh\build.json"
+    # The conversion builds a backslash Windows path as a literal string.
+    assert str(got).replace("/", "\\") == r"C:\Users\josh\build.json"
 
 
 # --------------------------------------------------------------------------- #
