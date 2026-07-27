@@ -10,7 +10,7 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
 - MCP integration for Claude Desktop and Claude Code
 - WorldEdit-compatible `.schem` file generation
 - Support for block states (e.g. `oak_log[axis=y]`) and negative coordinates
-- Automatic folder opening in Windows Explorer
+- Automatic folder opening in the OS file manager (Windows/macOS/Linux)
 - Support for structures from simple platforms to complex buildings
 - No API costs - works with your Claude subscription
 
@@ -96,7 +96,7 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 2. Claude generates a JSON definition with block coordinates
 3. Claude asks where to save the .schem file
 4. The tool converts JSON to Sponge Schematic v2 format
-5. Claude can open the folder in Windows Explorer
+5. Claude can open the folder in your OS file manager
 
 ### Tools Available
 
@@ -105,8 +105,10 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 - Supports direct JSON input for small/medium structures
 - Supports file-based input for large structures (see LARGE_STRUCTURE_GUIDE.md)
 
-**open_folder_in_explorer** - Opens Windows Explorer at the output location
-- Can highlight the created file
+**open_output_folder** - Opens the output location in the OS file manager
+- Works on Windows (Explorer), macOS (Finder), and Linux (xdg-open)
+- Highlights the created file on Windows/macOS
+- (`open_folder_in_explorer` still works as a backwards-compatible alias)
 
 ### Importing into Minecraft
 
@@ -234,9 +236,12 @@ llm-minecraft-builds/
 - See `LARGE_STRUCTURE_GUIDE.md` for handling complex structures
 - For 300+ blocks, ask Claude to write JSON to file first
 
-**Path issues (WSL):**
-- Provide Windows paths: `C:\Users\username\Desktop`
-- Avoid WSL paths: `/mnt/c/Users/...`
+**Path issues:**
+- Use paths native to wherever the server runs: `C:\Users\name\Desktop` on
+  Windows, `/home/name/Desktop` on Linux/macOS.
+- The shortcuts `desktop`, `documents`, and `downloads` work on every OS.
+- Running under WSL, `/mnt/c/Users/...` paths work as-is (the server only
+  rewrites them to `C:\...` when it is running on native Windows).
 
 ## Development
 
