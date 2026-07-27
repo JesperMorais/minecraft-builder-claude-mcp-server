@@ -94,6 +94,38 @@
       "operations": [
         {"op": "pyramid", "center": [0, 0, 0], "base": 6, "axis": "y", "block": "sandstone"}
       ]
+    },
+    {
+      "name": "observatory_dome",
+      "description": "A hollow glass dome on a stone-brick drum",
+      "operations": [
+        {"op": "cylinder", "center": [0, 0, 0], "radius": 6, "height": 5, "block": "stone_bricks", "hollow": true},
+        {"op": "dome", "center": [0, 5, 0], "radius": 6, "block": "glass", "hollow": true}
+      ]
+    },
+    {
+      "name": "witch_tower",
+      "description": "A round tower capped with a conical roof and a spire",
+      "operations": [
+        {"op": "cylinder", "center": [0, 0, 0], "radius": 4, "height": 12, "block": "stone_bricks", "hollow": true},
+        {"op": "cone", "center": [0, 12, 0], "radius": 6, "height": 7, "block": "dark_oak_planks", "hollow": true},
+        {"op": "block", "pos": [0, 19, 0], "block": "lightning_rod"}
+      ]
+    },
+    {
+      "name": "giant_egg",
+      "description": "A hollow ellipsoid — a 12-tall egg you can walk inside",
+      "operations": [
+        {"op": "ellipsoid", "center": [0, 6, 0], "rx": 5, "ry": 7, "rz": 5, "block": "smooth_quartz", "hollow": true}
+      ]
+    },
+    {
+      "name": "fountain_ring",
+      "description": "A torus ring of prismarine sitting in a pool",
+      "operations": [
+        {"op": "cuboid", "start": [-9, 0, -9], "end": [9, 0, 9], "block": "water"},
+        {"op": "torus", "center": [0, 1, 0], "major_radius": 6, "minor_radius": 2, "block": "prismarine"}
+      ]
     }
   ]
 }
