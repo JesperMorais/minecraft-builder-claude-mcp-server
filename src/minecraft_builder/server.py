@@ -1,24 +1,30 @@
 """MCP Server for Minecraft structure generation."""
 
 import json
-import os
-from pathlib import Path
+import sys
+import traceback
 from typing import Any
 
 from mcp.server import Server
-from mcp.types import Tool, TextContent, EmbeddedResource, BlobResourceContents, Icon
+from mcp.types import Tool, TextContent, Icon
 from pydantic import ValidationError
 
 from .schema import MinecraftStructure
 from .converter import SchematicConverter
+from .paths import (
+    open_in_file_manager,
+    resolve_input_path,
+    resolve_output_directory,
+)
 
 
 # Initialize MCP server
 app = Server("minecraft-builder")
 
-# Default output directory - use user's Desktop for easy access
-import os
-OUTPUT_DIR = Path(os.path.expanduser("~")) / "Desktop" / "minecraft_structures"
+
+def _log(message: str) -> None:
+    """Log to stderr — stdout is reserved for the MCP stdio transport."""
+    print(message, file=sys.stderr)
 
 
 @app.list_tools()
@@ -94,21 +100,24 @@ Before calling this tool, ask the user where they would like to save the .schem 
             }
         ),
         Tool(
-            name="open_folder_in_explorer",
+            name="open_output_folder",
             icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmYzEwNyIgZD0iTTIwIDZoLThsLTItMkg0Yy0xLjEgMC0xLjk5LjktMS45OSAyTDIgMThjMCAxLjEuOSAyIDIgMmgxNmMxLjEgMCAyLS45IDItMlY4YzAtMS4xLS45LTItMi0yeiIvPjwvc3ZnPg==", mimeType="image/svg+xml")],
-            description="""Opens a folder in Windows Explorer, optionally selecting a specific file.
+            description="""Opens a folder in the operating system's file manager, optionally selecting a specific file.
 
-Use this after creating a Minecraft structure to help the user find the file easily.""",
+Works on Windows (Explorer), macOS (Finder) and Linux (xdg-open). File
+highlighting is supported on Windows/macOS; on Linux the containing folder is
+opened. Use this after creating a Minecraft structure to help the user find the
+file easily.""",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "folder_path": {
                         "type": "string",
-                        "description": "Full path to the folder to open (e.g., 'C:\\Users\\josh\\Desktop')"
+                        "description": "Full path to the folder to open (e.g., '/home/user/Desktop' or 'C:\\Users\\josh\\Desktop')"
                     },
                     "select_file": {
                         "type": "string",
-                        "description": "Optional: Full path to a file to select/highlight in the folder"
+                        "description": "Optional: Full path to a file to select/highlight in the folder (Windows/macOS only)"
                     }
                 },
                 "required": ["folder_path"]
@@ -121,32 +130,24 @@ Use this after creating a Minecraft structure to help the user find the file eas
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls."""
 
-    if name == "open_folder_in_explorer":
-        import subprocess
-
+    # "open_folder_in_explorer" kept as a backwards-compatible alias.
+    if name in ("open_output_folder", "open_folder_in_explorer"):
         folder_path = arguments["folder_path"]
         select_file = arguments.get("select_file")
 
         try:
-            if select_file:
-                # Open explorer and select the specific file
-                subprocess.run(['explorer', '/select,', select_file])
-                return [
-                    TextContent(
-                        type="text",
-                        text=f"✓ Opened Windows Explorer and selected:\n{select_file}"
-                    )
-                ]
-            else:
-                # Just open the folder
-                subprocess.run(['explorer', folder_path])
-                return [
-                    TextContent(
-                        type="text",
-                        text=f"✓ Opened Windows Explorer at:\n{folder_path}"
-                    )
-                ]
+            message = open_in_file_manager(folder_path, select_file)
+            return [TextContent(type="text", text=f"✓ {message}")]
+        except FileNotFoundError:
+            return [
+                TextContent(
+                    type="text",
+                    text="❌ Error opening folder: no file-manager command found "
+                         "(expected explorer/open/xdg-open on this system)."
+                )
+            ]
         except Exception as e:
+            _log(f"open_output_folder failed: {traceback.format_exc()}")
             return [
                 TextContent(
                     type="text",
@@ -160,20 +161,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     try:
         # Get JSON data - either from direct string or from file
         if "json_file_path" in arguments and arguments["json_file_path"]:
-            # Read from file
-            json_path = arguments["json_file_path"]
-
-            # Try to handle WSL paths (convert to Windows paths)
-            if json_path.startswith('/mnt/'):
-                # WSL path like /mnt/c/Users/josh/Desktop/file.json
-                # Convert to C:\Users\josh\Desktop\file.json
-                parts = json_path.split('/')
-                drive_letter = parts[2].upper()
-                windows_path = drive_letter + ':' + '\\' + '\\'.join(parts[3:])
-                json_file = Path(windows_path)
-            else:
-                json_file = Path(json_path)
-
+            # Read from file (WSL->Windows conversion only applies on Windows)
+            json_file = resolve_input_path(arguments["json_file_path"])
             with open(json_file, 'r') as f:
                 structure_data = json.load(f)
         elif "structure_json" in arguments and arguments["structure_json"]:
@@ -198,18 +187,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 )
             ]
 
-        # Get output directory from arguments and resolve shortcuts
-        output_dir_str = arguments["output_directory"].strip().lower()
-
-        # Handle common shortcuts
-        if output_dir_str in ["desktop", "my desktop"]:
-            output_dir = Path(os.path.expanduser("~")) / "Desktop"
-        elif output_dir_str in ["documents", "my documents"]:
-            output_dir = Path(os.path.expanduser("~")) / "Documents"
-        elif output_dir_str in ["downloads"]:
-            output_dir = Path(os.path.expanduser("~")) / "Downloads"
-        else:
-            output_dir = Path(arguments["output_directory"])
+        # Resolve output directory (friendly shortcuts + XDG on Linux)
+        output_dir = resolve_output_directory(arguments["output_directory"])
 
         # Determine output filename
         output_filename = arguments.get("output_filename") or structure.name
@@ -248,7 +227,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 🎮 **Import to Minecraft:**
 - WorldEdit: `//schem load {output_filename.replace('.schem', '')}`
 
-💡 **Tip:** I can open this folder in Windows Explorer for you if you'd like!
+💡 **Tip:** I can open this folder in your file manager for you if you'd like!
 """
             )
         ]
@@ -275,10 +254,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             )
         ]
     except Exception as e:
+        # stderr only — stdout carries the MCP protocol.
+        _log(f"create_minecraft_structure failed: {traceback.format_exc()}")
         return [
             TextContent(
                 type="text",
-                text=f"❌ Error creating structure: {str(e)}"
+                text=f"❌ Error creating structure: {type(e).__name__}: {str(e)}"
             )
         ]
 
