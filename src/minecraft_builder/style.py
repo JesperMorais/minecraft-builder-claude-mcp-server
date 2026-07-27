@@ -25,9 +25,10 @@ get_build_style_guide first. These rules apply regardless:
 - Depth: no flat wall face longer than 6-8 blocks. Add pillars (+1 out), inset
   windows (-1 in), a base plinth, and a roofline cornice.
 - Roof: real pitch (stairs give 45 degrees), overhang 1-2 blocks past the walls,
-  ridge capped with a full block or slab run.
-- Proportion: 3+ blocks headroom, 4-5 per storey, roof height ~1/3 of wall
-  height, footprint nearer 1:1.5 than square.
+  ridge capped. A gable narrows by 2 per course — check the arithmetic lands on a
+  1-2 wide ridge, or you get a flat top that looks like a mistake.
+- Proportion: 3+ blocks headroom, 4-5 per storey, roof rise 4-10 blocks,
+  footprint nearer 1:1.5 than square.
 - Light: one lantern per 6-8 blocks of facade and one per interior room. Prefer
   lantern over torch. A build with no light sources looks dead.
 - Silhouette: break the rectangle (L/T/U footprint, or a wing, bay or tower).

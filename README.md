@@ -9,6 +9,9 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
 - Natural language to Minecraft structure conversion
 - **Shape primitives** (cuboid, hollow box, sphere, cylinder, line, pyramid) so
   large builds are a handful of operations instead of thousands of blocks
+- **Build style guide** served to Claude as a tool, so structures come out
+  looking designed rather than merely valid — palettes, depth, proportion,
+  roof pitch, lighting (see [Build quality](#build-quality))
 - MCP integration for Claude Desktop and Claude Code
 - WorldEdit-compatible `.schem` file generation
 - Support for block states (e.g. `oak_log[axis=y]`) and negative coordinates
@@ -115,6 +118,33 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 - Highlights the created file on Windows/macOS
 - (`open_folder_in_explorer` still works as a backwards-compatible alias)
 
+**get_build_style_guide** - Returns the build style guide (no arguments)
+- Claude should call this before designing anything larger than a few dozen blocks
+
+## Build quality
+
+A structure can be perfectly valid and still look like a beginner threw it
+together. Because Claude never sees the generated build — there is no render and
+no feedback loop — quality has to come from rules applied *before* the JSON is
+emitted.
+
+Two mechanisms handle that:
+
+- A **compact checklist** is embedded in the `create_minecraft_structure`
+  description, so the non-negotiables (3–5 block palette, no flat walls, real
+  roof pitch, lighting) always apply.
+- The **full guide** lives in
+  [`src/minecraft_builder/data/style_guide.md`](src/minecraft_builder/data/style_guide.md)
+  and is served on demand by `get_build_style_guide`. It covers themed block
+  palettes, depth techniques, proportion and roof-pitch numbers, silhouette,
+  lighting, ground transitions, a cookbook of shape-operation recipes, common
+  anti-patterns, and a pre-flight checklist.
+
+The guide is **tested, not just written**: `tests/test_style.py` validates every
+block ID it mentions against all three supported version registries, and builds
+every cookbook recipe through the real conversion pipeline. A palette that goes
+stale or a recipe that stops working fails CI.
+
 ### Importing into Minecraft
 
 The generated `.schem` files work with **WorldEdit**:
@@ -201,20 +231,27 @@ Still supported for scattered detail a shape can't express:
 ## Project Structure
 
 ```
-llm-minecraft-builds/
+minecraft-builder-claude-mcp-server/
 ├── src/minecraft_builder/
-│   ├── __init__.py
-│   ├── __main__.py       # MCP server entry point
-│   ├── server.py          # MCP server and tool definitions
-│   ├── schema.py          # Pydantic data models
-│   └── converter.py       # JSON to .schem converter
+│   ├── __main__.py          # MCP server entry point
+│   ├── server.py            # MCP server and tool definitions
+│   ├── schema.py            # Pydantic models + shape operations
+│   ├── shapes.py            # Pure geometry generators
+│   ├── converter.py         # JSON to .schem converter
+│   ├── versions.py          # Version support + block-ID validation
+│   ├── style.py             # Style guide loader + compact checklist
+│   ├── paths.py             # Path resolution and file-manager opening
+│   └── data/
+│       ├── style_guide.md   # The build style guide
+│       └── blocks_*.txt     # Vendored per-version block registries
+├── tests/
 ├── examples/
 │   ├── example_structures.json
+│   ├── japanese_pagoda.json
 │   └── PROMPTS.md
 ├── requirements.txt
 ├── pyproject.toml
 ├── README.md
-├── CLAUDE.md              # Instructions for Claude Code
 └── LARGE_STRUCTURE_GUIDE.md
 ```
 

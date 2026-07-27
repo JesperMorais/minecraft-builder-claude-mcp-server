@@ -133,7 +133,7 @@ and placing them in a regular grid looks worse than not doing it at all.
 |---|---|
 | Interior headroom | **3 blocks** minimum |
 | Floor-to-floor story height | **4–5 blocks** |
-| Roof height | **⅓ of wall height** for houses; never more than 2 stories |
+| Roof rise | **4–10 blocks (1–2 stories)**. A 45° gable rises half its own width, so anything wider than ~20 needs split sections or a mansard |
 | Roof overhang past walls | **1–2 blocks** (2–3 for Japanese/alpine) |
 | Exterior wall thickness | 1 is fine for small builds *if* pillars give apparent depth; 2+ for anything castle-scale |
 | Doorway | 2 wide × 3 tall for a main entrance; 1 × 2 is a closet |
@@ -143,6 +143,10 @@ and placing them in a regular grid looks worse than not doing it at all.
 A 20-wide building with a single 45° gable produces a 10-block roof — 2+ stories
 of roof, badly out of proportion. Fix by splitting into multiple roof sections of
 5–7 block rise each, adding a mansard break, or adding a parapet walkway.
+
+On a small cottage the opposite holds: a 45° roof taller than its 4-block walls
+is correct and reads as charming. Judge the rise against the 4–10 block band, not
+against the walls.
 
 ---
 
@@ -275,9 +279,19 @@ walls topping at y=4. Ridge runs along X, slopes fall along Z:
 {"op": "cuboid", "start": [-1, 6,  7], "end": [12, 6,  7], "block": "dark_oak_stairs[facing=north]"},
 {"op": "cuboid", "start": [-1, 7,  1], "end": [12, 7,  1], "block": "dark_oak_stairs[facing=south]"},
 {"op": "cuboid", "start": [-1, 7,  6], "end": [12, 7,  6], "block": "dark_oak_stairs[facing=north]"},
-{"op": "cuboid", "start": [-1, 8,  2], "end": [12, 8,  5], "block": "dark_oak_planks"}
+{"op": "cuboid", "start": [-1, 8,  2], "end": [12, 8,  2], "block": "dark_oak_stairs[facing=south]"},
+{"op": "cuboid", "start": [-1, 8,  5], "end": [12, 8,  5], "block": "dark_oak_stairs[facing=north]"},
+{"op": "cuboid", "start": [-1, 9,  3], "end": [12, 9,  4], "block": "dark_oak_planks"}
 ```
-Each course steps up 1 and in 1 from both sides; the last strip closes the ridge.
+Each course steps up 1 and in 1 from **both** sides, so the roof narrows by 2 per
+course. Keep going until 1–2 blocks remain, then cap that as the ridge.
+
+**Work the arithmetic out before you emit the ops.** Eaves here span z −1..8, so
+the width is 10: courses leave 10 → 8 → 6 → 4 → 2. An even width always lands on
+a 2-wide ridge (cap with full blocks or a `[type=bottom]` slab run); an odd width
+peaks at a single ridge line. Stopping a course early leaves a wide flat top —
+that is a mansard, not a gable, and it looks like a mistake unless intended.
+
 Both slopes share one facing each, opposite to the other. **If the slope looks
 inverted in-game, swap the two `facing` values.**
 
@@ -365,8 +379,8 @@ yes, fix the JSON first.
 1. **Palette** — 3–5 blocks, roughly 50/30/20? Roof material ≠ wall material?
 2. **Depth** — at least 3 depth techniques applied? No flat face over 6–8 blocks?
 3. **Texture** — a sparse accent scatter on large wall faces?
-4. **Proportion** — 3+ headroom, 4–5 per story, roof ≈ ⅓ of wall height?
-5. **Roof** — real pitch, overhangs 1–2 blocks, ridge capped?
+4. **Proportion** — 3+ headroom, 4–5 per story, roof rise in the 4–10 band?
+5. **Roof** — real pitch, arithmetic checked to a 1–2 wide ridge, overhangs 1–2 blocks, ridge capped?
 6. **Silhouette** — not a plain box? One taller focal element?
 7. **Openings** — doors 2×3, windows inset with glass set 1 back?
 8. **Light** — one per 6–8 blocks of facade, one per interior room?

@@ -5,11 +5,14 @@ mentioned in the guide to the same registry check real builds go through, so the
 shipped palettes can't rot as versions move on.
 """
 
+import json
 import re
 
 import pytest
 
 from minecraft_builder import versions
+from minecraft_builder.converter import SchematicConverter
+from minecraft_builder.schema import MinecraftStructure
 from minecraft_builder.style import STYLE_CHECKLIST, load_style_guide
 
 # Tokens in the guide that are backticked but aren't block IDs: op names, field
@@ -20,6 +23,7 @@ NON_BLOCK_TOKENS = frozenset({
     "hollow", "walls", "floor", "ceiling", "pos", "from_block", "to_block",
     "facing", "half", "type", "axis", "open", "hanging", "mc_version",
     "create_minecraft_structure", "get_build_style_guide",
+    "true", "false",  # block-state values, referenced bare in prose
 })
 
 # A bare block id, optionally with a block-state suffix.
@@ -65,6 +69,55 @@ def test_guide_block_ids_are_valid():
 def test_guide_block_ids_valid_on_every_version(version):
     unknown = versions.validate_block_ids(sorted(_block_ids_in_guide()), version)
     assert not unknown, f"invalid for {version}: {', '.join(unknown)}"
+
+
+def _cookbook_recipes() -> list[list[dict]]:
+    """Parse each ```json fence in the guide into an operation list.
+
+    The fences are fragments — comma-separated ops without the enclosing array —
+    so they can be dropped straight into an "operations" list.
+    """
+    fences = re.findall(r"```json\n(.*?)```", load_style_guide(), re.S)
+    return [json.loads("[" + f.strip().rstrip(",") + "]") for f in fences]
+
+
+def test_cookbook_recipes_build():
+    recipes = _cookbook_recipes()
+    assert len(recipes) >= 8, f"expected the full cookbook, found {len(recipes)}"
+    for i, ops in enumerate(recipes, 1):
+        structure = MinecraftStructure(name=f"recipe_{i}", operations=ops)
+        block_map = structure.expand()
+        assert block_map, f"recipe {i} produced no blocks"
+        unknown = versions.validate_block_ids(
+            set(block_map.values()), versions.DEFAULT_VERSION
+        )
+        assert not unknown, f"recipe {i} has invalid blocks: {unknown}"
+
+
+def test_cookbook_recipes_convert(tmp_path):
+    for i, ops in enumerate(_cookbook_recipes(), 1):
+        structure = MinecraftStructure(name=f"recipe_{i}", operations=ops)
+        out = tmp_path / f"recipe_{i}.schem"
+        SchematicConverter.to_schematic(structure, str(out))
+        assert out.exists() and out.stat().st_size > 0
+
+
+def test_single_course_rings_are_not_solid_slabs():
+    """Guard the hollow_box gotcha the cookbook warns about.
+
+    A 1-tall hollow_box with floor/ceiling off must yield a perimeter ring, not a
+    filled plane — this is what the plinth, cornice and battlement recipes rely on.
+    """
+    ring = MinecraftStructure(name="ring", operations=[{
+        "op": "hollow_box", "start": [0, 0, 0], "end": [9, 0, 9],
+        "block": "stone", "walls": True, "floor": False, "ceiling": False,
+    }]).expand()
+    assert len(ring) == 36, f"expected a 10x10 perimeter (36), got {len(ring)}"
+
+    solid = MinecraftStructure(name="solid", operations=[{
+        "op": "hollow_box", "start": [0, 0, 0], "end": [9, 0, 9], "block": "stone",
+    }]).expand()
+    assert len(solid) == 100, "default floor=True should fill the plane"
 
 
 def test_checklist_stays_compact():
