@@ -121,6 +121,11 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 **get_build_style_guide** - Returns the build style guide (no arguments)
 - Claude should call this before designing anything larger than a few dozen blocks
 
+**preview_structure** - Renders an ASCII preview of a structure without saving
+- Top-down layer slices + block legend + stats (size, solid/air, fill ratio)
+- Lets Claude sanity-check geometry (doorways, roundness, hollowness) first
+- Takes the same input as `create_minecraft_structure`
+
 ## Build quality
 
 A structure can be perfectly valid and still look like a beginner threw it
