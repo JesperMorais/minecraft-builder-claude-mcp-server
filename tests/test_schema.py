@@ -85,4 +85,37 @@ def test_empty_structure_size():
 
 def test_unknown_op_rejected():
     with pytest.raises(Exception):
-        MinecraftStructure(name="bad", operations=[{"op": "torus", "block": "stone"}])
+        MinecraftStructure(name="bad", operations=[{"op": "spiral", "block": "stone"}])
+
+
+def test_new_geometry_ops_expand():
+    # Each new op should route through the discriminated union and place blocks.
+    ops = [
+        {"op": "dome", "center": [0, 0, 0], "radius": 4, "block": "quartz_block"},
+        {"op": "cone", "center": [20, 0, 0], "radius": 3, "height": 6, "block": "stone"},
+        {"op": "ellipsoid", "center": [40, 0, 0], "rx": 5, "ry": 2, "rz": 3, "block": "glass"},
+        {"op": "torus", "center": [60, 0, 0], "major_radius": 6, "minor_radius": 2, "block": "gold_block"},
+    ]
+    for op in ops:
+        s = MinecraftStructure(name=op["op"], operations=[op])
+        block_map = s.expand()
+        assert block_map, f"{op['op']} produced no blocks"
+        assert set(block_map.values()) == {op["block"]}
+
+
+def test_new_ops_respect_hollow_and_layering():
+    # A solid dome then a hollow dome carved into air still leaves a shell.
+    s = MinecraftStructure(name="dome", operations=[
+        {"op": "dome", "center": [0, 0, 0], "radius": 5, "block": "stone", "hollow": True},
+    ])
+    solid = MinecraftStructure(name="d2", operations=[
+        {"op": "dome", "center": [0, 0, 0], "radius": 5, "block": "stone"},
+    ])
+    assert len(s.expand()) < len(solid.expand())
+
+
+def test_torus_requires_positive_radii():
+    with pytest.raises(Exception):
+        MinecraftStructure(name="t", operations=[
+            {"op": "torus", "center": [0, 0, 0], "major_radius": 0, "minor_radius": 2, "block": "stone"},
+        ])

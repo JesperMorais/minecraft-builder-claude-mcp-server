@@ -145,6 +145,64 @@ class PyramidOp(_Operation):
             blocks[c] = self.block
 
 
+class DomeOp(_Operation):
+    op: Literal["dome"]
+    center: Vec3 = Field(..., description="Centre of the flat base [x, y, z]")
+    radius: int = Field(..., ge=0, description="Radius in blocks")
+    axis: Literal["x", "y", "z"] = Field("y", description="Direction the dome bulges toward")
+    block: str = Field(..., description="Block ID to fill with")
+    hollow: bool = Field(False, description="Curved shell only, open at the base, if true")
+
+    def apply(self, blocks: BlockMap) -> None:
+        for c in shapes.dome(tuple(self.center), self.radius, axis=self.axis, hollow=self.hollow):
+            blocks[c] = self.block
+
+
+class ConeOp(_Operation):
+    op: Literal["cone"]
+    center: Vec3 = Field(..., description="Centre of the base [x, y, z]")
+    radius: int = Field(..., ge=0, description="Base radius in blocks")
+    height: int = Field(..., ge=1, description="Height from base to apex")
+    axis: Literal["x", "y", "z"] = Field("y", description="Axis from base toward apex")
+    block: str = Field(..., description="Block ID to fill with")
+    hollow: bool = Field(False, description="Sloped wall only (open interior/base) if true")
+
+    def apply(self, blocks: BlockMap) -> None:
+        for c in shapes.cone(tuple(self.center), self.radius, self.height, axis=self.axis, hollow=self.hollow):
+            blocks[c] = self.block
+
+
+class EllipsoidOp(_Operation):
+    op: Literal["ellipsoid"]
+    center: Vec3 = Field(..., description="Centre [x, y, z]")
+    rx: int = Field(..., ge=1, description="Semi-axis along X")
+    ry: int = Field(..., ge=1, description="Semi-axis along Y")
+    rz: int = Field(..., ge=1, description="Semi-axis along Z")
+    block: str = Field(..., description="Block ID to fill with")
+    hollow: bool = Field(False, description="Surface shell only if true")
+
+    def apply(self, blocks: BlockMap) -> None:
+        for c in shapes.ellipsoid(tuple(self.center), self.rx, self.ry, self.rz, hollow=self.hollow):
+            blocks[c] = self.block
+
+
+class TorusOp(_Operation):
+    op: Literal["torus"]
+    center: Vec3 = Field(..., description="Centre of the ring [x, y, z]")
+    major_radius: int = Field(..., ge=1, description="Centre-to-tube-middle radius")
+    minor_radius: int = Field(..., ge=1, description="Tube radius")
+    axis: Literal["x", "y", "z"] = Field("y", description="Symmetry axis (through the hole)")
+    block: str = Field(..., description="Block ID to fill with")
+    hollow: bool = Field(False, description="Tube surface skin only if true")
+
+    def apply(self, blocks: BlockMap) -> None:
+        for c in shapes.torus(
+            tuple(self.center), self.major_radius, self.minor_radius,
+            axis=self.axis, hollow=self.hollow,
+        ):
+            blocks[c] = self.block
+
+
 class BlockOp(_Operation):
     op: Literal["block"]
     pos: Vec3 = Field(..., description="Position [x, y, z]")
@@ -185,7 +243,8 @@ def _match_key(block_id: str) -> str:
 Operation = Annotated[
     Union[
         CuboidOp, HollowBoxOp, SphereOp, CylinderOp,
-        LineOp, PyramidOp, BlockOp, ReplaceOp,
+        LineOp, PyramidOp, DomeOp, ConeOp, EllipsoidOp, TorusOp,
+        BlockOp, ReplaceOp,
     ],
     Field(discriminator="op"),
 ]
