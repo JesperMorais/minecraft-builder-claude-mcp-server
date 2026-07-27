@@ -64,7 +64,7 @@ def test_line_endpoints_and_continuity():
     assert coords[0] == (0, 0, 0)
     assert coords[-1] == (5, 3, 2)
     # Consecutive voxels never jump more than one step on any axis.
-    for (a, b) in zip(coords, coords[1:]):
+    for (a, b) in zip(coords, coords[1:], strict=False):
         assert all(abs(a[i] - b[i]) <= 1 for i in range(3))
 
 

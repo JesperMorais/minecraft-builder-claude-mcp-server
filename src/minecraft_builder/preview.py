@@ -9,10 +9,23 @@ test and reused by both the preview tool and the create-tool result summary.
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, TypedDict
 
 from .schema import BlockMap, MinecraftStructure
 from .versions import base_block_id
+
+
+class Stats(TypedDict):
+    """Summary numbers for a block map."""
+    empty: bool
+    width: int
+    height: int
+    length: int
+    placed: int
+    solid: int
+    air: int
+    fill_ratio: float
+    counts: Dict[str, int]
 
 # Characters assigned to block types, most-common first. Air renders as '.'.
 _LEGEND_CHARS = (
@@ -32,7 +45,7 @@ def is_air(block_id: str) -> bool:
     return base_block_id(block_id).endswith("air")
 
 
-def structure_stats(block_map: BlockMap) -> Dict[str, object]:
+def structure_stats(block_map: BlockMap) -> Stats:
     """Summarise a block map: bounds, counts, per-type tally and fill ratio."""
     if not block_map:
         return {
@@ -105,9 +118,12 @@ def render_preview(structure: MinecraftStructure) -> str:
     )
     lines.append(_counts_line(stats["counts"]))
 
-    min_x = min(c[0] for c in block_map); max_x = max(c[0] for c in block_map)
-    min_y = min(c[1] for c in block_map); max_y = max(c[1] for c in block_map)
-    min_z = min(c[2] for c in block_map); max_z = max(c[2] for c in block_map)
+    min_x = min(c[0] for c in block_map)
+    max_x = max(c[0] for c in block_map)
+    min_y = min(c[1] for c in block_map)
+    max_y = max(c[1] for c in block_map)
+    min_z = min(c[2] for c in block_map)
+    max_z = max(c[2] for c in block_map)
 
     if stats["width"] > MAX_FOOTPRINT_DIM or stats["length"] > MAX_FOOTPRINT_DIM:
         lines.append(

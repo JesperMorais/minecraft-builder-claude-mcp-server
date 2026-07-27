@@ -6,18 +6,18 @@ import traceback
 from typing import Any
 
 from mcp.server import Server
-from mcp.types import Tool, TextContent, Icon
+from mcp.types import Icon, TextContent, Tool
 from pydantic import ValidationError
 
-from .schema import MinecraftStructure
 from .converter import SchematicConverter
-from .preview import render_preview, stats_summary
-from .style import STYLE_CHECKLIST, load_style_guide
 from .paths import (
     open_in_file_manager,
     resolve_input_path,
     resolve_output_directory,
 )
+from .preview import render_preview, stats_summary
+from .schema import MinecraftStructure
+from .style import STYLE_CHECKLIST, load_style_guide
 from .versions import (
     DEFAULT_VERSION,
     LATEST_VERSION,
@@ -26,7 +26,6 @@ from .versions import (
     supported_versions,
     validate_block_ids,
 )
-
 
 # Initialize MCP server
 app = Server("minecraft-builder")

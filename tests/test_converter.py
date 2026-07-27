@@ -2,8 +2,8 @@
 
 from mcschematic import MCSchematic
 
-from minecraft_builder.schema import MinecraftStructure
 from minecraft_builder.converter import SchematicConverter
+from minecraft_builder.schema import MinecraftStructure
 
 
 def test_normalize_block_id():

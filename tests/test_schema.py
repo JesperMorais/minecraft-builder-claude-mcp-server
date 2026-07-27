@@ -1,6 +1,7 @@
 """Tests for structure expansion, layering, and size calculation."""
 
 import pytest
+from pydantic import ValidationError
 
 from minecraft_builder.schema import MinecraftStructure
 
@@ -84,7 +85,7 @@ def test_empty_structure_size():
 
 
 def test_unknown_op_rejected():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         MinecraftStructure(name="bad", operations=[{"op": "spiral", "block": "stone"}])
 
 
@@ -115,7 +116,7 @@ def test_new_ops_respect_hollow_and_layering():
 
 
 def test_torus_requires_positive_radii():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         MinecraftStructure(name="t", operations=[
             {"op": "torus", "center": [0, 0, 0], "major_radius": 0, "minor_radius": 2, "block": "stone"},
         ])

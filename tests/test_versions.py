@@ -3,8 +3,8 @@
 import pytest
 
 from minecraft_builder import versions
-from minecraft_builder.schema import MinecraftStructure
 from minecraft_builder.converter import SchematicConverter
+from minecraft_builder.schema import MinecraftStructure
 
 
 def test_supported_versions_map_to_mcschematic():

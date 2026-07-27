@@ -13,9 +13,9 @@ carve a window out of it with ``air``.
 """
 
 from typing import Dict, List, Literal, Optional, Tuple, Union
-from typing_extensions import Annotated
 
 from pydantic import BaseModel, Field
+from typing_extensions import Annotated
 
 from . import shapes
 
@@ -24,6 +24,11 @@ Vec3 = Annotated[List[int], Field(min_length=3, max_length=3)]
 
 # The running block map an operation reads from and writes to.
 BlockMap = Dict[Tuple[int, int, int], str]
+
+
+def _v3(vec: List[int]) -> Tuple[int, int, int]:
+    """A validated Vec3 as a fixed 3-tuple (satisfies the shapes.Coord type)."""
+    return (vec[0], vec[1], vec[2])
 
 
 class BlockData(BaseModel):
@@ -69,7 +74,7 @@ class CuboidOp(_Operation):
     block: str = Field(..., description="Block ID to fill with")
 
     def apply(self, blocks: BlockMap) -> None:
-        for c in shapes.cuboid(tuple(self.start), tuple(self.end)):
+        for c in shapes.cuboid(_v3(self.start), _v3(self.end)):
             blocks[c] = self.block
 
 
@@ -84,7 +89,7 @@ class HollowBoxOp(_Operation):
 
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.hollow_box(
-            tuple(self.start), tuple(self.end),
+            _v3(self.start), _v3(self.end),
             walls=self.walls, floor=self.floor, ceiling=self.ceiling,
         ):
             blocks[c] = self.block
@@ -98,7 +103,7 @@ class SphereOp(_Operation):
     hollow: bool = Field(False, description="Only the outer shell if true")
 
     def apply(self, blocks: BlockMap) -> None:
-        for c in shapes.sphere(tuple(self.center), self.radius, hollow=self.hollow):
+        for c in shapes.sphere(_v3(self.center), self.radius, hollow=self.hollow):
             blocks[c] = self.block
 
 
@@ -113,7 +118,7 @@ class CylinderOp(_Operation):
 
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.cylinder(
-            tuple(self.center), self.radius, self.height,
+            _v3(self.center), self.radius, self.height,
             axis=self.axis, hollow=self.hollow,
         ):
             blocks[c] = self.block
@@ -126,7 +131,7 @@ class LineOp(_Operation):
     block: str = Field(..., description="Block ID to fill with")
 
     def apply(self, blocks: BlockMap) -> None:
-        for c in shapes.line(tuple(self.start), tuple(self.end)):
+        for c in shapes.line(_v3(self.start), _v3(self.end)):
             blocks[c] = self.block
 
 
@@ -140,7 +145,7 @@ class PyramidOp(_Operation):
 
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.pyramid(
-            tuple(self.center), self.base, axis=self.axis, hollow=self.hollow,
+            _v3(self.center), self.base, axis=self.axis, hollow=self.hollow,
         ):
             blocks[c] = self.block
 
@@ -154,7 +159,7 @@ class DomeOp(_Operation):
     hollow: bool = Field(False, description="Curved shell only, open at the base, if true")
 
     def apply(self, blocks: BlockMap) -> None:
-        for c in shapes.dome(tuple(self.center), self.radius, axis=self.axis, hollow=self.hollow):
+        for c in shapes.dome(_v3(self.center), self.radius, axis=self.axis, hollow=self.hollow):
             blocks[c] = self.block
 
 
@@ -168,7 +173,7 @@ class ConeOp(_Operation):
     hollow: bool = Field(False, description="Sloped wall only (open interior/base) if true")
 
     def apply(self, blocks: BlockMap) -> None:
-        for c in shapes.cone(tuple(self.center), self.radius, self.height, axis=self.axis, hollow=self.hollow):
+        for c in shapes.cone(_v3(self.center), self.radius, self.height, axis=self.axis, hollow=self.hollow):
             blocks[c] = self.block
 
 
@@ -182,7 +187,7 @@ class EllipsoidOp(_Operation):
     hollow: bool = Field(False, description="Surface shell only if true")
 
     def apply(self, blocks: BlockMap) -> None:
-        for c in shapes.ellipsoid(tuple(self.center), self.rx, self.ry, self.rz, hollow=self.hollow):
+        for c in shapes.ellipsoid(_v3(self.center), self.rx, self.ry, self.rz, hollow=self.hollow):
             blocks[c] = self.block
 
 
@@ -197,7 +202,7 @@ class TorusOp(_Operation):
 
     def apply(self, blocks: BlockMap) -> None:
         for c in shapes.torus(
-            tuple(self.center), self.major_radius, self.minor_radius,
+            _v3(self.center), self.major_radius, self.minor_radius,
             axis=self.axis, hollow=self.hollow,
         ):
             blocks[c] = self.block
@@ -209,7 +214,7 @@ class BlockOp(_Operation):
     block: str = Field(..., description="Block ID to place")
 
     def apply(self, blocks: BlockMap) -> None:
-        blocks[tuple(self.pos)] = self.block
+        blocks[_v3(self.pos)] = self.block
 
 
 class ReplaceOp(_Operation):
@@ -220,8 +225,8 @@ class ReplaceOp(_Operation):
     to_block: str = Field(..., description="Block ID to swap it to ('air' to remove)")
 
     def apply(self, blocks: BlockMap) -> None:
-        target = _match_key(from_block := self.from_block)
-        for c in shapes.cuboid(tuple(self.start), tuple(self.end)):
+        target = _match_key(self.from_block)
+        for c in shapes.cuboid(_v3(self.start), _v3(self.end)):
             existing = blocks.get(c)
             if existing is not None and _match_key(existing) == target:
                 blocks[c] = self.to_block
