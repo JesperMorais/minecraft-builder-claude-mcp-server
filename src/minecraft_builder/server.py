@@ -10,6 +10,7 @@ from mcp.types import Icon, TextContent, Tool
 from pydantic import ValidationError
 
 from .converter import DEFAULT_FORMATS, OUTPUT_FORMATS, SchematicConverter
+from .lint import format_report, lint_structure
 from .paths import (
     open_in_file_manager,
     resolve_input_path,
@@ -489,6 +490,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             # waiting for its next poll.
             viewer_chat.announce_structure(version, structure.name)
             size = structure.calculate_size()
+            # Reviewing in the viewer is exactly when style feedback is
+            # actionable, so the checklist verdict rides along with every show.
+            style_report = format_report(lint_structure(structure, block_map))
             return [TextContent(
                 type="text",
                 text=f"""✓ Showing **{structure.name}** in the 3D viewer (version {version}).
@@ -497,6 +501,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
 - Size: {size.width}x{size.height}x{size.length} blocks
 - Operations: {len(structure.blocks) + len(structure.operations)}
+
+📐 {style_report}
 
 The page updates on its own, so tell the user to open that link once and leave it
 open — later versions appear without a reload."""
@@ -594,6 +600,10 @@ open — later versions appear without a reload."""
 
         saved = "\n".join(f"- `{fmt}`: {path}" for fmt, path in written.items())
 
+        # The export is the last chance to catch a guide violation before the
+        # build lands in a world, so the checklist verdict is part of the result.
+        style_report = format_report(lint_structure(structure, block_map))
+
         return [
             TextContent(
                 type="text",
@@ -607,6 +617,8 @@ open — later versions appear without a reload."""
 - Target version: {mc_version}
 {stats_summary(block_map)}
 {warning_text}
+📐 {style_report}
+
 🎮 **Import to Minecraft:**
 {_import_instructions(written, stem)}
 💡 **Tip:** I can open this folder in your file manager for you if you'd like!
