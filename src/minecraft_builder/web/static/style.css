@@ -22,9 +22,14 @@ html, body {
 
 #hud {
   position: fixed;
-  top: 0;
-  left: 0;
-  padding: 14px 18px;
+  top: 14px;
+  left: 14px;
+  max-width: min(680px, calc(100vw - 300px));
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
   pointer-events: none;
 }
 
@@ -218,7 +223,12 @@ html, body {
   left: 366px;
   font-size: 12px;
   color: var(--muted);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 5px 9px;
 }
+
+#status:empty { display: none; }
 
 #status.error { color: #ff9b9b; }
 

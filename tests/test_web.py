@@ -11,7 +11,13 @@ import pytest
 from minecraft_builder import web
 from minecraft_builder.schema import MinecraftStructure
 from minecraft_builder.web.chat import CHAT, Chat, EventBus
-from minecraft_builder.web.payload import VOXEL_STRIDE, build_payload, visible_coords
+from minecraft_builder.web.payload import (
+    VOXEL_STRIDE,
+    build_payload,
+    occludes,
+    visible_coords,
+)
+from minecraft_builder.web.prompts import PROMPTS
 from minecraft_builder.web.state import ViewerState
 
 
@@ -55,6 +61,49 @@ def test_air_is_neither_drawn_nor_treated_as_solid():
     assert payload["counts"]["drawn"] > solid
     palette_blocks = [entry["block"] for entry in payload["palette"]]
     assert not any("air" in block for block in palette_blocks)
+
+
+@pytest.mark.parametrize("block", [
+    "oak_stairs[facing=south,half=top]",
+    "spruce_slab[type=bottom]",
+    "oak_fence",
+    "glass_pane",
+    "iron_bars",
+    "lantern[hanging=true]",
+    "glass",
+    "spruce_trapdoor[facing=north,open=true]",
+    "minecraft:cobblestone_wall",
+    "air",
+])
+def test_partial_and_see_through_blocks_do_not_occlude(block):
+    assert not occludes(block)
+
+
+@pytest.mark.parametrize("block", [
+    "stone",
+    "oak_planks",
+    "minecraft:oak_log[axis=y]",
+    "sea_lantern",  # glows, but is a full cube — unlike lantern
+    "glowstone",
+])
+def test_full_opaque_cubes_occlude(block):
+    assert occludes(block)
+
+
+def test_voxels_behind_partial_blocks_are_kept():
+    # A stone cube whose top face is covered by stairs: with stairs treated as
+    # solid the layer below would be culled as enclosed, but a stair does not
+    # fill its cell, so that layer is still (partly) visible.
+    capped = MinecraftStructure(
+        name="capped",
+        operations=[
+            {"op": "cuboid", "start": [0, 0, 0], "end": [4, 4, 4], "block": "stone"},
+            {"op": "cuboid", "start": [0, 5, 0], "end": [4, 5, 4],
+             "block": "oak_stairs[facing=south]"},
+        ],
+    )
+    coords = set(visible_coords(capped.expand()))
+    assert (2, 4, 2) in coords  # centre of the face under the stairs
 
 
 def test_voxel_array_is_a_multiple_of_the_stride():
@@ -170,11 +219,13 @@ def viewer():
     """A running viewer, torn down afterwards so the port is released."""
     web.STATE.clear()
     CHAT.clear()
+    PROMPTS.clear()
     url = web.ensure_running().rstrip("/")
     yield url
     web.shutdown()
     web.STATE.clear()
     CHAT.clear()
+    PROMPTS.clear()
 
 
 def _post(url, path, payload):

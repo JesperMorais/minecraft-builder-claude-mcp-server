@@ -23,11 +23,47 @@ from typing import Dict, List, Tuple
 
 from ..colors import block_hex, is_visible
 from ..schema import BlockMap, MinecraftStructure
+from ..versions import base_block_id
 
 # Values per voxel in the flat array: x, y, z, palette index, operation index.
 VOXEL_STRIDE = 5
 
 _NEIGHBOURS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
+
+# Blocks that do not fill their whole cell. A face pressed against a stair or a
+# fence post is still (partly) visible, so these never count as occluders. The
+# viewer draws them with real partial geometry, which is exactly why the gaps
+# they leave must stay populated.
+_PARTIAL_SUFFIXES = (
+    "_stairs", "_slab", "_fence", "_fence_gate", "_wall", "_pane", "_bars",
+    "_door", "_trapdoor", "_button", "_pressure_plate", "_sign", "_carpet",
+    "_rod", "_chain", "_candle", "_torch", "_pot",
+)
+# Partial blocks whose names carry no shape suffix. sea_lantern is notably
+# absent: unlike lantern/soul_lantern it is a full cube.
+_PARTIAL_EXACT = frozenset({
+    "chain", "lantern", "soul_lantern", "copper_lantern", "torch", "campfire",
+    "soul_campfire", "candle", "flower_pot", "ladder", "snow", "leaf_litter",
+    "end_rod", "lightning_rod",
+})
+# Full cubes you can see through; they keep their neighbours' faces visible.
+_SEE_THROUGH_EXACT = frozenset({"glass", "tinted_glass"})
+
+
+def occludes(block: str) -> bool:
+    """True if this block completely hides a face pressed against it.
+
+    Only full, opaque cubes occlude. Matching is on the base ID so block
+    states (``oak_stairs[facing=south]``) do not defeat the check.
+    """
+    if not is_visible(block):
+        return False
+    base = base_block_id(block)
+    if base in _PARTIAL_EXACT or base in _SEE_THROUGH_EXACT:
+        return False
+    if base.endswith("_glass"):
+        return False
+    return not base.endswith(_PARTIAL_SUFFIXES)
 
 
 def _is_occluded(coord: Tuple[int, int, int], solid: set) -> bool:
@@ -41,12 +77,14 @@ def visible_coords(block_map: BlockMap, include_interior: bool = False) -> List[
 
     Air is not "transparent" here, it is absent — an air block in the map is
     empty space, so it both goes undrawn and leaves its neighbours' faces
-    exposed.
+    exposed. Culling counts only full opaque cubes as enclosing: a voxel
+    behind glass or under a stair is still (partly) visible.
     """
-    solid = {c for c, block in block_map.items() if is_visible(block)}
+    drawable = sorted(c for c, block in block_map.items() if is_visible(block))
     if include_interior:
-        return sorted(solid)
-    return sorted(c for c in solid if not _is_occluded(c, solid))
+        return drawable
+    solid = {c for c, block in block_map.items() if occludes(block)}
+    return [c for c in drawable if not _is_occluded(c, solid)]
 
 
 def build_payload(

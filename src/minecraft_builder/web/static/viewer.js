@@ -1,17 +1,25 @@
 /**
  * 3D viewer for generated Minecraft structures.
  *
- * The whole build is one InstancedMesh with a per-instance colour, so it draws in
- * a single call regardless of block count. Fully enclosed voxels never reach the
- * browser — the server drops them — so what arrives is already just the shell.
+ * Blocks are grouped by shape: full cubes, but also stairs, slabs, fences,
+ * panes, lanterns and the rest of the partial-block vocabulary, each drawn as
+ * one InstancedMesh per (geometry, material) pair — a couple of dozen draw
+ * calls regardless of block count. Shape and orientation are parsed from the
+ * block ID itself (`oak_stairs[facing=south,half=top]`), so the server sends
+ * nothing beyond the palette it already sent. Fully enclosed voxels never
+ * reach the browser — the server drops them.
  *
- * Colours are flat: Minecraft's textures are Mojang's and can't be shipped. For
- * judging a build, directional shading over flat colour reads the silhouette and
- * material choices well enough, which is what this phase is meant to answer.
+ * Minecraft's textures are Mojang's and can't be shipped, so material feel
+ * comes from generated stand-ins instead: a small procedural luminance map per
+ * material family (plank grain, brick courses, stone noise) multiplied with
+ * the palette colour, a deterministic per-block tint jitter, real sun shadows,
+ * and a sky gradient with a grass plane so builds sit in a world instead of a
+ * void.
  */
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
 /**
  * Events arrive over SSE. This slower poll is the safety net: EventSource
@@ -44,25 +52,389 @@ const linkLabelEl = document.getElementById('link-label');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
+scene.background = skyTexture();
+// Fog blends the ground plane into the horizon instead of ending it at a hard
+// clipped edge; the distances are set per build in frameCamera().
+scene.fog = new THREE.Fog(0xcfe0f5, 100, 1000);
+
 const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
 // Hemisphere light keeps downward faces from going pure black; the directional
-// light is what makes edges legible on flat-coloured cubes.
-scene.add(new THREE.HemisphereLight(0xffffff, 0x404050, 1.5));
-const sun = new THREE.DirectionalLight(0xffffff, 1.5);
-sun.position.set(0.6, 1, 0.35);
-scene.add(sun);
+// light is what casts shadows and makes edges legible.
+scene.add(new THREE.HemisphereLight(0xdfeaff, 0x6b7256, 1.35));
+const sun = new THREE.DirectionalLight(0xffffff, 1.7);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+// Lifts shadow sampling off the surface; without it every face self-shadows
+// into stripes ("shadow acne") at this scale.
+sun.shadow.normalBias = 0.03;
+scene.add(sun, sun.target);
 
-const CUBE = new THREE.BoxGeometry(1, 1, 1);
+/** Minecraft-ish clear day: light zenith falling to a pale horizon. */
+function skyTexture() {
+  const sky = document.createElement('canvas');
+  sky.width = 1;
+  sky.height = 256;
+  const ctx = sky.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 256);
+  gradient.addColorStop(0, '#78a7ff');
+  gradient.addColorStop(0.7, '#a8c6f8');
+  gradient.addColorStop(1, '#cfe0f5');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 1, 256);
+  const texture = new THREE.CanvasTexture(sky);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+// --------------------------------------------------------------------------- //
+// Block shapes
+//
+// Everything below turns a block ID into (geometry, orientation, material
+// class). Geometries are built once in a canonical orientation — facing
+// "south" (+Z), sitting in a unit cell centred on the origin — and instances
+// carry their rotation and any vertical offset in the per-instance matrix.
+// --------------------------------------------------------------------------- //
+
+/** `minecraft:oak_stairs[facing=south,half=top]` → base id + state map. */
+function parseBlock(id) {
+  const stateStart = id.indexOf('[');
+  let base = (stateStart === -1 ? id : id.slice(0, stateStart)).trim();
+  base = base.replace(/^minecraft:/, '');
+  const states = {};
+  if (stateStart !== -1) {
+    const stateEnd = id.lastIndexOf(']');
+    for (const pair of id.slice(stateStart + 1, stateEnd === -1 ? id.length : stateEnd).split(',')) {
+      const [key, value] = pair.split('=');
+      if (key && value !== undefined) states[key.trim()] = value.trim();
+    }
+  }
+  return { base, states };
+}
+
+/** Merge axis-aligned boxes ([cx, cy, cz, sx, sy, sz]) into one geometry. */
+function boxes(...specs) {
+  const parts = specs.map(([cx, cy, cz, sx, sy, sz]) => {
+    const box = new THREE.BoxGeometry(sx, sy, sz);
+    box.translate(cx, cy, cz);
+    return box;
+  });
+  const merged = BufferGeometryUtils.mergeGeometries(parts);
+  parts.forEach((part) => part.dispose());
+  return merged;
+}
+
+/**
+ * Shared shape geometries. Sixteenths, like Minecraft's own models: a fence
+ * post is 4/16 wide, a trapdoor 3/16 thick. Shapes that vary by block state in
+ * more than a rotation (stairs half=top) get a geometry per variant, because
+ * an InstancedMesh has exactly one geometry; pure rotations and vertical
+ * offsets stay in the instance matrix instead.
+ */
+const GEOMETRY = {
+  cube: boxes([0, 0, 0, 1, 1, 1]),
+  slab: boxes([0, 0, 0, 1, 0.5, 1]),
+  stairs_bottom: boxes([0, -0.25, 0, 1, 0.5, 1], [0, 0.25, 0.25, 1, 0.5, 0.5]),
+  stairs_top: boxes([0, 0.25, 0, 1, 0.5, 1], [0, -0.25, 0.25, 1, 0.5, 0.5]),
+  fence_post: boxes([0, 0, 0, 0.25, 1, 0.25]),
+  fence_arm: boxes([0, 0.125, 0.25, 0.15, 0.55, 0.5]),
+  wall_post: boxes([0, 0, 0, 0.5, 1, 0.5]),
+  wall_arm: boxes([0, -0.075, 0.25, 0.375, 0.85, 0.5]),
+  pane_core: boxes([0, 0, 0, 0.125, 1, 0.125]),
+  pane_arm: boxes([0, 0, 0.28125, 0.125, 1, 0.4375]),
+  gate: boxes([0, 0.05, 0, 1, 0.7, 0.25]),
+  // Doors, open trapdoors and ladders press against the cell edge opposite
+  // their facing, so the offset is baked into the geometry and rotates with it.
+  door: boxes([0, 0, -0.40625, 1, 1, 0.1875]),
+  trapdoor_closed: boxes([0, 0, 0, 1, 0.1875, 1]),
+  trapdoor_open: boxes([0, 0, -0.40625, 1, 1, 0.1875]),
+  lantern: boxes([0, -0.21875, 0, 0.375, 0.4375, 0.375], [0, 0.03125, 0, 0.25, 0.125, 0.25]),
+  chain: boxes([0, 0, 0, 0.09375, 1, 0.09375]),
+  torch: boxes([0, -0.1875, 0, 0.125, 0.625, 0.125]),
+  campfire: boxes([0, -0.28125, 0, 0.9375, 0.4375, 0.9375]),
+  candle: boxes([0, -0.3125, 0, 0.1875, 0.375, 0.1875]),
+  carpet: boxes([0, -0.46875, 0, 1, 0.0625, 1]),
+  rod: boxes([0, 0, 0, 0.15625, 1, 0.15625]),
+  pot: boxes([0, -0.3125, 0, 0.375, 0.375, 0.375]),
+  plate: boxes([0, -0.46875, 0, 0.875, 0.0625, 0.875]),
+  button: boxes([0, -0.4375, 0, 0.375, 0.125, 0.25]),
+};
+
+/** Horizontal facings: rotation around +Y that maps canonical +Z onto the
+ * direction, plus the neighbour offset used for connection checks. */
+const FACINGS = {
+  south: { angle: 0, dx: 0, dz: 1 },
+  east: { angle: Math.PI / 2, dx: 1, dz: 0 },
+  north: { angle: Math.PI, dx: 0, dz: -1 },
+  west: { angle: -Math.PI / 2, dx: -1, dz: 0 },
+};
+
+/** Full-brightness blocks, drawn unlit so they read as light sources. */
+const GLOW_EXACT = new Set([
+  'lantern', 'soul_lantern', 'copper_lantern', 'sea_lantern', 'glowstone',
+  'shroomlight', 'redstone_lamp', 'campfire', 'soul_campfire', 'end_rod',
+  'torch', 'candle', 'magma_block', 'crying_obsidian',
+]);
+
+function isGlowing(base) {
+  return GLOW_EXACT.has(base) || /(_torch|_candle|_froglight)$/.test(base);
+}
+
+function isGlass(base) {
+  return base === 'glass' || base === 'tinted_glass' || base.endsWith('_glass')
+    || (base.endsWith('_pane') && base.includes('glass'));
+}
+
+/** Map a base id (+states) to one of the GEOMETRY shape families. */
+function kindOf(base, states) {
+  if (base.endsWith('_stairs')) return 'stairs';
+  if (base.endsWith('_slab')) return states.type === 'double' ? 'cube' : 'slab';
+  if (base.endsWith('_fence_gate')) return 'gate';
+  if (base.endsWith('_fence')) return 'fence';
+  if (base.endsWith('_wall')) return 'wall';
+  if (base.endsWith('_pane') || base.endsWith('_bars')) return 'pane';
+  if (base.endsWith('_trapdoor')) return 'trapdoor';
+  if (base.endsWith('_door') || base === 'ladder') return 'door';
+  if (base.endsWith('_button')) return 'button';
+  if (base.endsWith('_pressure_plate')) return 'plate';
+  if (base.endsWith('_carpet') || base === 'snow' || base === 'leaf_litter') return 'carpet';
+  if (base === 'chain' || base.endsWith('_chain')) return 'chain';
+  if (base === 'lantern' || base === 'soul_lantern' || base === 'copper_lantern') return 'lantern';
+  if (base === 'torch' || base.endsWith('_torch')) return 'torch';
+  if (base === 'campfire' || base === 'soul_campfire') return 'campfire';
+  if (base === 'candle' || base.endsWith('_candle')) return 'candle';
+  if (base === 'end_rod' || base === 'lightning_rod') return 'rod';
+  if (base === 'flower_pot' || base.endsWith('_flower_pot')) return 'pot';
+  return 'cube';
+}
+
+// --------------------------------------------------------------------------- //
+// Procedural textures
+//
+// Mojang's textures can't be shipped, so each material family gets a small
+// generated luminance map instead: white pixels leave the palette colour
+// untouched, darker ones shade it. The same texture serves every colour of a
+// family (all planks share the plank grain), because the colour still comes
+// from the per-instance palette tint.
+// --------------------------------------------------------------------------- //
+
+const TEXTURE_SIZE = 16;
+const at = (x, y) => y * TEXTURE_SIZE + x;
+
+/** Small deterministic PRNG, so a pattern looks identical on every rebuild. */
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function noisePaint(amount) {
+  return (lum, rand) => {
+    for (let i = 0; i < lum.length; i++) lum[i] = 1 - rand() * amount;
+  };
+}
+
+function planksPaint(lum, rand) {
+  noisePaint(0.08)(lum, rand);
+  for (let band = 0; band < 4; band++) {
+    const seam = band * 4 + 3;
+    for (let x = 0; x < TEXTURE_SIZE; x++) lum[at(x, seam)] *= 0.76;
+    const joint = Math.floor(rand() * TEXTURE_SIZE);
+    for (let y = band * 4; y < band * 4 + 3; y++) lum[at(joint, y)] *= 0.82;
+  }
+}
+
+function bricksPaint(lum, rand) {
+  noisePaint(0.08)(lum, rand);
+  for (let course = 0; course < 4; course++) {
+    const mortar = course * 4;
+    for (let x = 0; x < TEXTURE_SIZE; x++) lum[at(x, mortar)] *= 0.72;
+    for (let x = course % 2 ? 0 : 4; x < TEXTURE_SIZE; x += 8) {
+      for (let y = mortar + 1; y < mortar + 4; y++) lum[at(x, y)] *= 0.72;
+    }
+  }
+}
+
+function stoneBricksPaint(lum, rand) {
+  noisePaint(0.1)(lum, rand);
+  for (let i = 0; i < TEXTURE_SIZE; i++) {
+    lum[at(i, 0)] *= 0.78;
+    lum[at(i, 8)] *= 0.78;
+    lum[at(0, i)] *= 0.78;
+    lum[at(8, i)] *= 0.78;
+  }
+}
+
+function logPaint(lum, rand) {
+  for (let x = 0; x < TEXTURE_SIZE; x++) {
+    const grain = 1 - rand() * 0.2;
+    for (let y = 0; y < TEXTURE_SIZE; y++) lum[at(x, y)] = grain * (1 - rand() * 0.08);
+  }
+}
+
+function specklePaint(lum, rand) {
+  noisePaint(0.14)(lum, rand);
+  for (let i = 0; i < 10; i++) {
+    const x = Math.floor(rand() * (TEXTURE_SIZE - 1));
+    const y = Math.floor(rand() * (TEXTURE_SIZE - 1));
+    const shade = 0.75 + rand() * 0.15;
+    lum[at(x, y)] *= shade;
+    lum[at(x + 1, y)] *= shade;
+    lum[at(x, y + 1)] *= shade;
+  }
+}
+
+function leavesPaint(lum, rand) {
+  for (let i = 0; i < lum.length; i++) {
+    const v = rand();
+    lum[i] = v < 0.18 ? 0.55 + rand() * 0.15 : 1 - rand() * 0.3;
+  }
+}
+
+function woolPaint(lum, rand) {
+  noisePaint(0.07)(lum, rand);
+  for (let y = 0; y < TEXTURE_SIZE; y += 2) {
+    for (let x = 0; x < TEXTURE_SIZE; x++) lum[at(x, y)] *= 0.95;
+  }
+}
+
+/** jitter: per-block colour variation, so large same-material faces get the
+ * subtle patchwork Minecraft terrain has. Strong on natural materials, near
+ * zero on manufactured ones. */
+const PATTERNS = {
+  stone: { paint: noisePaint(0.13), jitter: 0.05 },
+  speckle: { paint: specklePaint, jitter: 0.06 },
+  soil: { paint: noisePaint(0.2), jitter: 0.07 },
+  smooth: { paint: noisePaint(0.045), jitter: 0.015 },
+  planks: { paint: planksPaint, jitter: 0.025 },
+  log: { paint: logPaint, jitter: 0.03 },
+  bricks: { paint: bricksPaint, jitter: 0.03 },
+  stonebricks: { paint: stoneBricksPaint, jitter: 0.04 },
+  leaves: { paint: leavesPaint, jitter: 0.09 },
+  wool: { paint: woolPaint, jitter: 0.02 },
+};
+
+const textureCache = new Map();
+
+function textureFor(pattern) {
+  let texture = textureCache.get(pattern);
+  if (texture) return texture;
+  const source = document.createElement('canvas');
+  source.width = source.height = TEXTURE_SIZE;
+  const ctx = source.getContext('2d');
+  const rand = mulberry32([...pattern].reduce((h, c) => h * 31 + c.charCodeAt(0), 7));
+  const lum = new Float32Array(TEXTURE_SIZE * TEXTURE_SIZE).fill(1);
+  PATTERNS[pattern].paint(lum, rand);
+  // A one-pixel darker rim on every face: the poor man's ambient occlusion,
+  // and what keeps individual blocks readable in a same-colour wall.
+  for (let i = 0; i < TEXTURE_SIZE; i++) {
+    for (const edge of [at(i, 0), at(i, TEXTURE_SIZE - 1), at(0, i), at(TEXTURE_SIZE - 1, i)]) {
+      lum[edge] *= 0.9;
+    }
+  }
+  const image = ctx.createImageData(TEXTURE_SIZE, TEXTURE_SIZE);
+  lum.forEach((value, i) => {
+    const v = Math.round(255 * Math.max(0, Math.min(1, value)));
+    image.data.set([v, v, v, 255], i * 4);
+  });
+  ctx.putImageData(image, 0, 0);
+  texture = new THREE.CanvasTexture(source);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  textureCache.set(pattern, texture);
+  return texture;
+}
+
+const WOOD_SPECIES = /^(?:stripped_)?(oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry|bamboo|crimson|warped|pale_oak)_/;
+
+/** Thin metal fittings read better untextured. */
+const UNTEXTURED = new Set([
+  'lantern', 'soul_lantern', 'copper_lantern', 'torch', 'soul_torch',
+  'redstone_torch', 'copper_torch', 'chain', 'iron_chain', 'copper_chain',
+  'end_rod', 'lightning_rod', 'iron_bars', 'copper_bars',
+]);
+
+function patternOf(base) {
+  if (isGlass(base) || UNTEXTURED.has(base)) return null;
+  if (base.includes('stone_brick') || base.includes('deepslate_brick')
+    || base.includes('deepslate_tile') || base.includes('blackstone_brick')
+    || base.includes('nether_brick')) return 'stonebricks';
+  if (base.includes('brick')) return 'bricks';
+  if (base.includes('log') || base.includes('stem') || base === 'bamboo_block'
+    || base.includes('basalt') || base.includes('pillar')) return 'log';
+  if (base.endsWith('_leaves') || base === 'moss_block' || base.includes('azalea')) return 'leaves';
+  if (base.includes('cobble') || base === 'gravel' || base === 'tuff'
+    || base === 'andesite' || base === 'diorite' || base === 'granite') return 'speckle';
+  if (base.includes('concrete') || base.includes('quartz') || base.includes('terracotta')
+    || base === 'calcite' || base.includes('smooth_') || base.includes('polished_')) return 'smooth';
+  if (base.includes('wool') || base.endsWith('_carpet')) return 'wool';
+  if (base.includes('dirt') || base.includes('sand') || base.includes('grass')
+    || base === 'podzol' || base === 'mud' || base === 'clay') return 'soil';
+  if (WOOD_SPECIES.test(base) || base.includes('plank')) return 'planks';
+  return 'stone';
+}
+
+/** Everything the renderer needs to know about one palette entry. */
+function describeBlock(block) {
+  const { base, states } = parseBlock(block);
+  const kind = kindOf(base, states);
+  const material = isGlowing(base) ? 'glow' : isGlass(base) ? 'glass' : 'solid';
+  const pattern = patternOf(base);
+  const jitter = pattern ? PATTERNS[pattern].jitter : 0;
+  return { kind, material, pattern, jitter, states };
+}
+
+/** What fences, walls and panes visually attach to. */
+function connectsTo(kind, neighbour) {
+  if (!neighbour) return false;
+  if (neighbour.kind === 'cube') return true;
+  if (kind === 'pane') return neighbour.kind === 'pane';
+  if (kind === 'fence') return neighbour.kind === 'fence' || neighbour.kind === 'gate';
+  if (kind === 'wall') return ['wall', 'fence', 'gate', 'pane'].includes(neighbour.kind);
+  return false;
+}
+
+// Materials are shared across rebuilds — the set is bounded by (class,
+// pattern) combinations — so disposeBuild leaves them alone.
+const materialCache = new Map();
+
+function materialFor(materialKind, pattern) {
+  const key = `${materialKind}|${pattern}`;
+  let material = materialCache.get(key);
+  if (material) return material;
+  const map = pattern ? textureFor(pattern) : null;
+  if (materialKind === 'glass') {
+    material = new THREE.MeshLambertMaterial({ map, transparent: true, opacity: 0.55 });
+  } else if (materialKind === 'glow') {
+    // Unlit, so light sources render at full brightness and read as glowing.
+    material = new THREE.MeshBasicMaterial({ map });
+  } else {
+    material = new THREE.MeshLambertMaterial({ map });
+  }
+  materialCache.set(key, material);
+  return material;
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
 
 /** Current payload and the scene objects built from it. */
 let payload = null;
-let mesh = null;
+let buildMeshes = [];
+let paletteColors = [];
 let grid = null;
 let axes = null;
 let lastVersion = -1;
@@ -73,17 +445,18 @@ function setStatus(text, isError = false) {
 }
 
 function disposeBuild() {
-  for (const object of [mesh, grid, axes]) {
+  for (const object of [...buildMeshes, grid, axes]) {
     if (!object) continue;
     scene.remove(object);
     // Instanced meshes hold GPU buffers; dropping the reference is not enough.
+    // dispose() releases the per-instance buffers and leaves the shared
+    // GEOMETRY entries alone. Materials live in materialCache and deliberately
+    // survive rebuilds; the helpers' dispose() handles their own materials.
     if (object.dispose) object.dispose();
-    // A mesh's dispose() leaves its material alone, since materials are often
-    // shared. Ours is built per structure, and the viewer rebuilds on every
-    // revision, so it has to go too or each new version leaks one.
-    if (object.material && object.material.dispose) object.material.dispose();
   }
-  mesh = grid = axes = null;
+  buildMeshes = [];
+  grid = axes = null;
+  if (ground) ground.visible = false;
 }
 
 /**
@@ -105,46 +478,173 @@ function buildScene(data) {
     return;
   }
 
-  const paletteColors = palette.map((entry) => new THREE.Color(entry.color));
-  const material = new THREE.MeshLambertMaterial();
-  mesh = new THREE.InstancedMesh(CUBE, material, count);
+  paletteColors = palette.map((entry) => new THREE.Color(entry.color));
+  const descriptors = palette.map((entry) => describeBlock(entry.block));
 
-  const matrix = new THREE.Matrix4();
-  const scratch = new THREE.Color();
-  const useOperation = byOperationEl.checked;
+  // Occupancy by cell, for the shapes that reach toward their neighbours.
+  const occupied = new Map();
+  for (let i = 0; i < count; i++) {
+    const base = i * stride;
+    occupied.set(
+      `${voxels[base]},${voxels[base + 1]},${voxels[base + 2]}`,
+      descriptors[voxels[base + 3]],
+    );
+  }
+  const neighbourAt = (x, y, z, facing) =>
+    occupied.get(`${x + facing.dx},${y},${z + facing.dz}`);
+
+  // One bucket per (geometry, material class, texture); each becomes an
+  // InstancedMesh.
+  const buckets = new Map();
+  const addInstance = (shape, desc, x, y, z, paletteIndex, operationIndex, angle = 0, lift = 0) => {
+    const key = `${shape}|${desc.material}|${desc.pattern}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { shape, materialKind: desc.material, pattern: desc.pattern, records: [] };
+      buckets.set(key, bucket);
+    }
+    bucket.records.push({ x, y, z, angle, lift, jitter: desc.jitter, paletteIndex, operationIndex });
+  };
 
   for (let i = 0; i < count; i++) {
     const base = i * stride;
-    // +0.5 centres the cube in its cell, matching how a Minecraft block
-    // occupies the volume between its coordinate and the next.
-    matrix.setPosition(
-      voxels[base] + 0.5,
-      voxels[base + 1] + 0.5,
-      voxels[base + 2] + 0.5,
-    );
-    mesh.setMatrixAt(i, matrix);
-    const color = useOperation
-      ? operationColor(voxels[base + 4], scratch)
-      : paletteColors[voxels[base + 3]];
-    mesh.setColorAt(i, color);
+    const [x, y, z] = [voxels[base], voxels[base + 1], voxels[base + 2]];
+    const paletteIndex = voxels[base + 3];
+    const operationIndex = voxels[base + 4];
+    const descriptor = descriptors[paletteIndex];
+    const { kind, states } = descriptor;
+    const facing = FACINGS[states.facing] || FACINGS.south;
+    const add = (shape, angle = 0, lift = 0) =>
+      addInstance(shape, descriptor, x, y, z, paletteIndex, operationIndex, angle, lift);
+
+    switch (kind) {
+      case 'slab':
+        add('slab', 0, states.type === 'top' ? 0.25 : -0.25);
+        break;
+      case 'stairs':
+        add(states.half === 'top' ? 'stairs_top' : 'stairs_bottom', facing.angle);
+        break;
+      case 'fence':
+      case 'wall':
+      case 'pane': {
+        const post = { fence: 'fence_post', wall: 'wall_post', pane: 'pane_core' }[kind];
+        const arm = { fence: 'fence_arm', wall: 'wall_arm', pane: 'pane_arm' }[kind];
+        const connected = Object.values(FACINGS)
+          .filter((dir) => connectsTo(kind, neighbourAt(x, y, z, dir)));
+        add(post);
+        // An unconnected pane still reads best as a small cross, like in-game.
+        const arms = connected.length || kind !== 'pane' ? connected : Object.values(FACINGS);
+        for (const dir of arms) add(arm, dir.angle);
+        break;
+      }
+      case 'gate':
+        add('gate', facing.angle);
+        break;
+      case 'trapdoor':
+        if (states.open === 'true') add('trapdoor_open', facing.angle);
+        else add('trapdoor_closed', 0, states.half === 'top' ? 0.40625 : -0.40625);
+        break;
+      case 'door':
+        add('door', facing.angle);
+        break;
+      case 'lantern':
+        add('lantern', 0, states.hanging === 'true' ? 0.4 : 0);
+        break;
+      default:
+        // cube, chain, torch, campfire, candle, carpet, rod, pot, plate, button
+        add(GEOMETRY[kind] ? kind : 'cube', facing.angle);
+        break;
+    }
   }
-  mesh.instanceMatrix.needsUpdate = true;
-  mesh.instanceColor.needsUpdate = true;
-  scene.add(mesh);
+
+  const matrix = new THREE.Matrix4();
+  const rotation = new THREE.Quaternion();
+  const position = new THREE.Vector3();
+  const unit = new THREE.Vector3(1, 1, 1);
+  const scratch = new THREE.Color();
+
+  for (const bucket of buckets.values()) {
+    const mesh = new THREE.InstancedMesh(
+      GEOMETRY[bucket.shape],
+      materialFor(bucket.materialKind, bucket.pattern),
+      bucket.records.length,
+    );
+    // Glass shadows read as solid-block shadows (the map is binary), and
+    // glowing blocks casting shadows looks contradictory — solids only.
+    mesh.castShadow = bucket.materialKind === 'solid';
+    mesh.receiveShadow = bucket.materialKind === 'solid';
+    bucket.records.forEach((record, index) => {
+      rotation.setFromAxisAngle(UP, record.angle);
+      // +0.5 centres the shape in its cell, matching how a Minecraft block
+      // occupies the volume between its coordinate and the next.
+      position.set(record.x + 0.5, record.y + 0.5 + record.lift, record.z + 0.5);
+      matrix.compose(position, rotation, unit);
+      mesh.setMatrixAt(index, matrix);
+      mesh.setColorAt(index, instanceColor(record, scratch));
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceColor.needsUpdate = true;
+    mesh.userData.records = bucket.records;
+    scene.add(mesh);
+    buildMeshes.push(mesh);
+  }
 
   addHelpers(bounds);
   frameCamera(bounds);
 }
 
+function instanceColor(record, target) {
+  if (byOperationEl.checked) return operationColor(record.operationIndex, target);
+  target.copy(paletteColors[record.paletteIndex]);
+  if (record.jitter) {
+    target.multiplyScalar(1 - record.jitter + 2 * record.jitter * hash3(record.x, record.y, record.z));
+  }
+  return target;
+}
+
+/** Deterministic 0..1 from a cell coordinate; stable across rebuilds, so a
+ * block keeps its tint when the build is revised around it. */
+function hash3(x, y, z) {
+  let h = (x * 374761393 + y * 668265263 + z * 1274126177) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1103515245);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+let ground = null;
+let groundTexture = null;
+
+/** Grass plane the build sits on; created once, repositioned per build. */
+function ensureGround() {
+  if (ground) return;
+  groundTexture = textureFor('soil').clone();
+  groundTexture.wrapS = THREE.RepeatWrapping;
+  groundTexture.wrapT = THREE.RepeatWrapping;
+  groundTexture.needsUpdate = true;
+  ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshLambertMaterial({ color: 0x7fae63, map: groundTexture }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+}
+
 function addHelpers(bounds) {
   const [minX, minY, minZ] = bounds.min;
-  const [sizeX, , sizeZ] = bounds.size;
+  const [sizeX, sizeY, sizeZ] = bounds.size;
   const span = Math.max(sizeX, sizeZ) + 8;
   const centreX = minX + sizeX / 2;
   const centreZ = minZ + sizeZ / 2;
 
+  ensureGround();
+  const groundSpan = span * 24; // runs to the fog, not to a visible edge
+  ground.scale.set(groundSpan, groundSpan, 1);
+  groundTexture.repeat.set(groundSpan, groundSpan); // one texture tile per block
+  ground.position.set(centreX, minY - 0.02, centreZ);
+  ground.visible = true;
+
   grid = new THREE.GridHelper(span, span, 0x3a3f47, 0x272b31);
-  grid.position.set(centreX, minY, centreZ);
+  grid.position.set(centreX, minY + 0.02, centreZ);
   grid.visible = showGridEl.checked;
   scene.add(grid);
 
@@ -153,6 +653,20 @@ function addHelpers(bounds) {
   axes = new THREE.AxesHelper(Math.min(6, span / 3));
   axes.position.set(minX, minY, minZ);
   scene.add(axes);
+
+  // Size the sun's shadow frustum to the build, so the shadow map's texels
+  // are spent on the build instead of a fixed world-sized box.
+  const radius = Math.max(sizeX, sizeY, sizeZ);
+  sun.position.set(centreX + radius * 1.4, minY + radius * 2.2, centreZ + radius * 0.8);
+  sun.target.position.set(centreX, minY, centreZ);
+  const shadowCam = sun.shadow.camera;
+  shadowCam.left = -radius * 1.8;
+  shadowCam.right = radius * 1.8;
+  shadowCam.top = radius * 1.8;
+  shadowCam.bottom = -radius * 1.8;
+  shadowCam.near = 0.5;
+  shadowCam.far = radius * 6 + 20;
+  shadowCam.updateProjectionMatrix();
 }
 
 function frameCamera(bounds) {
@@ -174,6 +688,11 @@ function frameCamera(bounds) {
   camera.updateProjectionMatrix();
   controls.target.copy(centre);
   controls.update();
+
+  // Keep the fog proportional to the framing: far enough to never tint the
+  // build itself, close enough that the ground plane fades before its edge.
+  scene.fog.near = distance * 4;
+  scene.fog.far = distance * 10;
 }
 
 function renderLegend(data) {
@@ -245,18 +764,13 @@ function applyPayload(data) {
 
 /** Recolour in place, without rebuilding geometry. */
 function recolor() {
-  if (!mesh || !payload) return;
-  const { voxels, stride, palette } = payload;
-  const paletteColors = palette.map((entry) => new THREE.Color(entry.color));
   const scratch = new THREE.Color();
-  const useOperation = byOperationEl.checked;
-  for (let i = 0; i < voxels.length / stride; i++) {
-    const base = i * stride;
-    mesh.setColorAt(i, useOperation
-      ? operationColor(voxels[base + 4], scratch)
-      : paletteColors[voxels[base + 3]]);
+  for (const mesh of buildMeshes) {
+    mesh.userData.records.forEach((record, index) => {
+      mesh.setColorAt(index, instanceColor(record, scratch));
+    });
+    mesh.instanceColor.needsUpdate = true;
   }
-  mesh.instanceColor.needsUpdate = true;
 }
 
 async function fetchPayload() {
@@ -315,12 +829,18 @@ function localNote(text) {
   renderMessage({ id: `local-${Date.now()}`, role: 'system', text });
 }
 
-function setLink(attached) {
-  linkDotEl.classList.toggle('live', attached === true);
-  linkDotEl.classList.toggle('down', attached === false);
-  linkLabelEl.textContent = attached
-    ? 'connected to Claude'
-    : 'no Claude session listening';
+function setLink(attached, waiting) {
+  // "waiting" (an await_prompt call is blocked on this queue right now) is the
+  // only state that proves delivery; "attached" just means an MCP session
+  // exists, and with channels blocked by org policy its pushes vanish silently.
+  const live = waiting === true || attached === true;
+  linkDotEl.classList.toggle('live', live);
+  linkDotEl.classList.toggle('down', waiting === false && attached === false);
+  linkLabelEl.textContent = waiting
+    ? 'Claude is listening'
+    : attached
+      ? 'connected to Claude'
+      : 'no Claude session listening';
 }
 
 async function sendPrompt(text) {
@@ -336,7 +856,7 @@ async function sendPrompt(text) {
     // The server echoes the prompt back over SSE, so it is not rendered here.
     awaitingReplySince = delivered ? Date.now() : null;
     warnedAboutSilence = false;
-    setLink(delivered);
+    setLink(delivered, false);
   } catch (error) {
     localNote(`Could not send that prompt: ${error.message}`);
   } finally {
@@ -353,9 +873,9 @@ function checkForSilence() {
   // sentence period lands inside the server name, which Claude Code then reports
   // as "no MCP server configured with that name".
   localNote(
-    'No response yet. Claude may still be working — or the channel is not '
-    + 'enabled. Channels only deliver when Claude Code was started from the '
-    + 'project root with this flag:\n'
+    'No response yet. Claude may still be working — or nothing is listening. '
+    + 'Ask Claude in the terminal to listen with its await_prompt tool (works '
+    + 'without any flag), or restart Claude Code from the project root with:\n'
     + '--dangerously-load-development-channels server:minecraft-builder',
   );
 }
@@ -370,7 +890,7 @@ function connectEvents() {
   source.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data.type === 'snapshot') {
-      setLink(data.attached);
+      setLink(data.attached, data.waiting);
       for (const message of data.messages) renderMessage(message);
       syncVersion(data.version).catch(() => {});
       setStatus('');
@@ -392,7 +912,7 @@ async function refreshStatus() {
     const response = await fetch('/api/status', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const status = await response.json();
-    setLink(status.attached);
+    setLink(status.attached, status.waiting);
     await syncVersion(status.version);
   } catch (error) {
     setStatus(`Lost contact with the viewer server (${error.message}).`, true);
