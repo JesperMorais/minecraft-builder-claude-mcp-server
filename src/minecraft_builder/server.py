@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from .schema import MinecraftStructure
 from .converter import SchematicConverter
+from .preview import render_preview, stats_summary
 from .style import STYLE_CHECKLIST, load_style_guide
 from .paths import (
     open_in_file_manager,
@@ -32,6 +33,25 @@ app = Server("minecraft-builder")
 def _log(message: str) -> None:
     """Log to stderr — stdout is reserved for the MCP stdio transport."""
     print(message, file=sys.stderr)
+
+
+def _load_structure(arguments: Any) -> MinecraftStructure:
+    """Parse a MinecraftStructure from structure_json or json_file_path.
+
+    Shared by create_minecraft_structure and preview_structure. Raises
+    ValueError if neither input is provided (and lets json/file/validation
+    errors propagate to the caller's handlers).
+    """
+    if arguments.get("json_file_path"):
+        # WSL->Windows conversion only applies on native Windows.
+        json_file = resolve_input_path(arguments["json_file_path"])
+        with open(json_file, "r") as f:
+            structure_data = json.load(f)
+    elif arguments.get("structure_json"):
+        structure_data = json.loads(arguments["structure_json"])
+    else:
+        raise ValueError("Must provide either structure_json or json_file_path")
+    return MinecraftStructure(**structure_data)
 
 
 def _format_block_warnings(unknown: dict, mc_version: str) -> str:
@@ -182,6 +202,33 @@ Takes no arguments.""",
                 "properties": {},
                 "additionalProperties": False
             }
+        ),
+        Tool(
+            name="preview_structure",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHJlY3QgZmlsbD0iIzMzMyIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0Ii8+PHRleHQgeD0iMyIgeT0iMTciIGZpbGw9IiM1ZjUiIGZvbnQtZmFtaWx5PSJtb25vc3BhY2UiIGZvbnQtc2l6ZT0iMTMiPiZndDtfPC90ZXh0Pjwvc3ZnPg==", mimeType="image/svg+xml")],
+            description="""Renders an ASCII preview of a structure WITHOUT saving a file.
+
+You cannot see the generated build, so use this to sanity-check geometry before
+calling create_minecraft_structure: is the doorway where you meant it, did the
+sphere come out round, is the interior actually hollow? Returns per-layer top-
+down slices (one grid per Y level, rows=Z, cols=X), a block legend, and stats
+(size, solid/air counts, fill ratio, most-common blocks).
+
+Takes the same structure input as create_minecraft_structure (structure_json or
+json_file_path). Large footprints show stats only.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "structure_json": {
+                        "type": "string",
+                        "description": "JSON string defining the structure (same format as create_minecraft_structure)."
+                    },
+                    "json_file_path": {
+                        "type": "string",
+                        "description": "Path to a .json structure file (alternative to structure_json)."
+                    }
+                }
+            }
         )
     ]
 
@@ -192,6 +239,16 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
     if name == "get_build_style_guide":
         return [TextContent(type="text", text=load_style_guide())]
+
+    if name == "preview_structure":
+        try:
+            structure = _load_structure(arguments)
+            return [TextContent(type="text", text=render_preview(structure))]
+        except (json.JSONDecodeError, FileNotFoundError, ValidationError, ValueError) as e:
+            return [TextContent(type="text", text=f"❌ Error: could not preview structure - {str(e)}")]
+        except Exception as e:
+            _log(f"preview_structure failed: {traceback.format_exc()}")
+            return [TextContent(type="text", text=f"❌ Error previewing structure: {type(e).__name__}: {str(e)}")]
 
     # "open_folder_in_explorer" kept as a backwards-compatible alias.
     if name in ("open_output_folder", "open_folder_in_explorer"):
@@ -222,24 +279,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         raise ValueError(f"Unknown tool: {name}")
 
     try:
-        # Get JSON data - either from direct string or from file
-        if "json_file_path" in arguments and arguments["json_file_path"]:
-            # Read from file (WSL->Windows conversion only applies on Windows)
-            json_file = resolve_input_path(arguments["json_file_path"])
-            with open(json_file, 'r') as f:
-                structure_data = json.load(f)
-        elif "structure_json" in arguments and arguments["structure_json"]:
-            # Parse from string
-            structure_data = json.loads(arguments["structure_json"])
-        else:
-            return [
-                TextContent(
-                    type="text",
-                    text="❌ Error: Must provide either structure_json or json_file_path"
-                )
-            ]
-
-        structure = MinecraftStructure(**structure_data)
+        # Parse the structure (from structure_json or json_file_path)
+        structure = _load_structure(arguments)
         block_map = structure.expand()
 
         if not block_map:
@@ -283,11 +324,6 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Convert to schematic
         result_path = SchematicConverter.to_schematic(structure, str(output_path), mc_version)
 
-        # Calculate statistics from the fully expanded block map
-        block_count = len(block_map)
-        size = structure.calculate_size()
-        unique_blocks = len(set(block_map.values()))
-
         return [
             TextContent(
                 type="text",
@@ -299,9 +335,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 📊 **Structure Info:**
 - Name: {structure.name}
 - Target version: {mc_version}
-- Size: {size.width}x{size.height}x{size.length} blocks
-- Total blocks: {block_count}
-- Unique block types: {unique_blocks}
+{stats_summary(block_map)}
 {warning_text}
 🎮 **Import to Minecraft:**
 - WorldEdit: `//schem load {output_filename.replace('.schem', '')}`
@@ -332,6 +366,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 text=f"❌ Error: Structure validation failed - {str(e)}"
             )
         ]
+    except ValueError as e:
+        # e.g. missing structure input from _load_structure
+        return [TextContent(type="text", text=f"❌ Error: {str(e)}")]
     except Exception as e:
         # stderr only — stdout carries the MCP protocol.
         _log(f"create_minecraft_structure failed: {traceback.format_exc()}")
