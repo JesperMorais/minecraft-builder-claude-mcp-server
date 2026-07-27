@@ -13,7 +13,20 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const POLL_INTERVAL_MS = 1000;
+/**
+ * Events arrive over SSE. This slower poll is the safety net: EventSource
+ * reconnects on its own, but a stream that dies quietly would otherwise leave
+ * the page showing a stale build indefinitely.
+ */
+const STATUS_INTERVAL_MS = 5000;
+
+/**
+ * How long to wait for Claude before telling the user something is wrong. A
+ * delivered prompt is not an acknowledged one — channel notifications get no
+ * reply, and a session started without the channel flag discards them in
+ * silence — so a timeout is the only way to surface that case.
+ */
+const REPLY_TIMEOUT_MS = 25000;
 
 const canvas = document.getElementById('scene');
 const titleEl = document.getElementById('title');
@@ -22,6 +35,12 @@ const legendEl = document.getElementById('legend');
 const statusEl = document.getElementById('status');
 const byOperationEl = document.getElementById('by-operation');
 const showGridEl = document.getElementById('show-grid');
+const messagesEl = document.getElementById('messages');
+const promptFormEl = document.getElementById('prompt-form');
+const promptEl = document.getElementById('prompt');
+const sendEl = document.getElementById('send');
+const linkDotEl = document.getElementById('link-dot');
+const linkLabelEl = document.getElementById('link-label');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -246,23 +265,136 @@ async function fetchPayload() {
   applyPayload(await response.json());
 }
 
-/**
- * Poll for a new version rather than pushing. The version endpoint is a single
- * integer, so this is cheap, and it keeps this phase free of a streaming
- * transport that the two-way channel will bring its own design for.
- */
-async function poll() {
+async function syncVersion(version) {
+  if (version === lastVersion) return;
+  lastVersion = version;
+  await fetchPayload();
+}
+
+// --------------------------------------------------------------------------- //
+// Chat
+// --------------------------------------------------------------------------- //
+
+/** Ids already rendered. SSE replays a snapshot on every reconnect. */
+const seenMessages = new Set();
+let awaitingReplySince = null;
+let warnedAboutSilence = false;
+
+function renderMessage(message) {
+  if (seenMessages.has(message.id)) return;
+  seenMessages.add(message.id);
+
+  const item = document.createElement('li');
+  item.className = `msg ${message.role}`;
+  if (message.role === 'user' && message.delivered === false) {
+    item.classList.add('undelivered');
+  }
+
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = { user: 'you', assistant: 'claude', system: 'viewer' }[message.role]
+    || message.role;
+
+  const body = document.createElement('span');
+  body.className = 'body';
+  // Message text is model-authored, so it is never treated as markup.
+  body.textContent = message.text;
+
+  item.append(who, body);
+  messagesEl.appendChild(item);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  if (message.role === 'assistant') {
+    awaitingReplySince = null;
+    warnedAboutSilence = false;
+  }
+}
+
+/** A note from the page itself; not part of the server transcript. */
+function localNote(text) {
+  renderMessage({ id: `local-${Date.now()}`, role: 'system', text });
+}
+
+function setLink(attached) {
+  linkDotEl.classList.toggle('live', attached === true);
+  linkDotEl.classList.toggle('down', attached === false);
+  linkLabelEl.textContent = attached
+    ? 'connected to Claude'
+    : 'no Claude session listening';
+}
+
+async function sendPrompt(text) {
+  sendEl.disabled = true;
   try {
-    const response = await fetch('/api/version', { cache: 'no-store' });
+    const response = await fetch('/api/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const { version } = await response.json();
-    if (version !== lastVersion) {
-      lastVersion = version;
-      await fetchPayload();
+    const { delivered } = await response.json();
+    // The server echoes the prompt back over SSE, so it is not rendered here.
+    awaitingReplySince = delivered ? Date.now() : null;
+    warnedAboutSilence = false;
+    setLink(delivered);
+  } catch (error) {
+    localNote(`Could not send that prompt: ${error.message}`);
+  } finally {
+    sendEl.disabled = false;
+    promptEl.focus();
+  }
+}
+
+function checkForSilence() {
+  if (awaitingReplySince === null || warnedAboutSilence) return;
+  if (Date.now() - awaitingReplySince < REPLY_TIMEOUT_MS) return;
+  warnedAboutSilence = true;
+  localNote(
+    'No response yet. The prompt reached the session, but Claude may still be '
+    + 'working — or the channel is not enabled. Channels only deliver when '
+    + 'Claude Code was started with '
+    + '--dangerously-load-development-channels server:minecraft-builder.',
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Transport
+// --------------------------------------------------------------------------- //
+
+function connectEvents() {
+  const source = new EventSource('/api/events');
+
+  source.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'snapshot') {
+      setLink(data.attached);
+      for (const message of data.messages) renderMessage(message);
+      syncVersion(data.version).catch(() => {});
+      setStatus('');
+    } else if (data.type === 'message') {
+      renderMessage(data.message);
+    } else if (data.type === 'structure') {
+      syncVersion(data.version).catch((error) => setStatus(error.message, true));
     }
+  };
+
+  // EventSource retries by itself; this only reports the gap.
+  source.onerror = () => setStatus('Reconnecting to the viewer server…', true);
+  source.onopen = () => setStatus('');
+}
+
+/** Fallback and liveness: catches a silently dead stream and refreshes the dot. */
+async function refreshStatus() {
+  try {
+    const response = await fetch('/api/status', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const status = await response.json();
+    setLink(status.attached);
+    await syncVersion(status.version);
   } catch (error) {
     setStatus(`Lost contact with the viewer server (${error.message}).`, true);
   }
+  checkForSilence();
 }
 
 function resize() {
@@ -284,7 +416,16 @@ showGridEl.addEventListener('change', () => {
 });
 window.addEventListener('resize', resize);
 
+promptFormEl.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const text = promptEl.value.trim();
+  if (!text) return;
+  promptEl.value = '';
+  sendPrompt(text);
+});
+
 resize();
 tick();
-poll();
-setInterval(poll, POLL_INTERVAL_MS);
+connectEvents();
+refreshStatus();
+setInterval(refreshStatus, STATUS_INTERVAL_MS);

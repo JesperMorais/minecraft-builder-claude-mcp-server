@@ -27,6 +27,19 @@
     <p id="subtitle"></p>
   </header>
 
+  <section id="chat" aria-label="Chat with Claude">
+    <div id="chat-header">
+      <span id="link-dot" class="dot" title="Connection to the Claude session"></span>
+      <span id="link-label">connecting…</span>
+    </div>
+    <ol id="messages"></ol>
+    <form id="prompt-form" autocomplete="off">
+      <input id="prompt" type="text" placeholder="Describe a build, or ask for a change…"
+             aria-label="Prompt">
+      <button type="submit" id="send">Send</button>
+    </form>
+  </section>
+
   <aside id="panel">
     <div class="row">
       <label><input type="checkbox" id="by-operation"> Colour by operation</label>

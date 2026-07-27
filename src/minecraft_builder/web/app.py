@@ -19,9 +19,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import Optional, Tuple
 
+from .channel import BRIDGE
+from .chat import CHAT
 from .state import STATE
 
 HOST = "127.0.0.1"
+
+# A prompt is a sentence, not a payload. Cap it so a stray POST cannot make the
+# server allocate without bound.
+MAX_PROMPT_BYTES = 64 * 1024
 
 # Tried first so the URL is stable between sessions; falls back to an ephemeral
 # port if something else already holds it.
@@ -72,9 +78,25 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/version":
-            # Cheap poll target: the page fetches the full payload only when
-            # this changes, which stands in for a push channel in this phase.
+            # Kept as a fallback for when the SSE stream drops: polling this
+            # single integer lets the page recover without a reload.
             self._send_json({"version": STATE.version})
+            return
+
+        if path == "/api/status":
+            # Drives the page's diagnostics. "attached" is the one that matters:
+            # false means no Claude session is listening, which is what a
+            # missing --dangerously-load-development-channels looks like.
+            self._send_json({
+                "attached": BRIDGE.attached,
+                "events_sent": BRIDGE.sent,
+                "viewers": CHAT.bus.subscriber_count,
+                "version": STATE.version,
+            })
+            return
+
+        if path == "/api/events":
+            self._stream_events()
             return
 
         static = _STATIC_FILES.get(path)
@@ -89,6 +111,70 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(500, f"Missing packaged asset: {filename}")
             return
         self._send_bytes(body, content_type)
+
+    def do_POST(self) -> None:  # noqa: N802 - name fixed by BaseHTTPRequestHandler
+        if self.path.split("?", 1)[0] != "/api/prompt":
+            self.send_error(404, "Not found")
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.send_error(400, "Bad Content-Length")
+            return
+        if length > MAX_PROMPT_BYTES:
+            self.send_error(413, "Prompt too large")
+            return
+
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+            text = str(body.get("text", "")).strip()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_error(400, "Body must be JSON")
+            return
+
+        if not text:
+            self.send_error(400, "Empty prompt")
+            return
+
+        # Push first, then record, so the transcript entry carries the real
+        # delivery outcome rather than an optimistic guess.
+        delivered = BRIDGE.push(text, {"chat_id": "web", "sender": "viewer"})
+        message = CHAT.from_user(text, delivered=delivered)
+        if not delivered:
+            CHAT.note(
+                "That prompt was not delivered: no Claude session is listening. "
+                "Start Claude Code with "
+                "--dangerously-load-development-channels server:minecraft-builder."
+            )
+        self._send_json({"delivered": delivered, "message": message})
+
+    def _stream_events(self) -> None:
+        """Hold an SSE connection open, replaying history then streaming events."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        # This response never ends, so it cannot be a keep-alive candidate.
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        subscriber = CHAT.bus.subscribe()
+        try:
+            # Subscribing before replaying means an event published mid-replay is
+            # queued rather than lost; the page dedupes on message id.
+            self._write_frame(_sse_snapshot())
+            for frame in CHAT.stream(subscriber):
+                self._write_frame(frame)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # Tab closed or navigated away.
+        finally:
+            CHAT.bus.unsubscribe(subscriber)
+
+    def _write_frame(self, frame: str) -> None:
+        self.wfile.write(frame.encode("utf-8"))
+        # Without an explicit flush the frame can sit in the buffer, which for a
+        # stream that is mostly idle means the page sees nothing at all.
+        self.wfile.flush()
 
     def _send_json(self, data: dict) -> None:
         self._send_bytes(json.dumps(data).encode("utf-8"), "application/json; charset=utf-8")
@@ -112,6 +198,20 @@ class _Handler(BaseHTTPRequestHandler):
         stderr is the MCP server's log channel and ends up in Claude Code's
         debug file, so request spam there is actively unhelpful.
         """
+
+
+def _sse_snapshot() -> str:
+    """First frame on a new connection: enough to render without a second fetch."""
+    return (
+        "data: "
+        + json.dumps({
+            "type": "snapshot",
+            "messages": CHAT.history(),
+            "version": STATE.version,
+            "attached": BRIDGE.attached,
+        })
+        + "\n\n"
+    )
 
 
 def _bind() -> Tuple[ThreadingHTTPServer, int]:
@@ -161,6 +261,9 @@ def shutdown() -> None:
         server.server_close()
     if thread is not None:
         thread.join(timeout=5)
+    # The SSE connections died with the server; the bus outlives it, so its
+    # subscriber list has to be dropped or they count as live viewers forever.
+    CHAT.bus.clear_subscribers()
 
 
 def port_in_use(port: int = PREFERRED_PORT) -> bool:

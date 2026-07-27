@@ -28,9 +28,35 @@ from .versions import (
 )
 from .web import STATE as viewer_state
 from .web import ensure_running as start_viewer
+from .web.channel import BRIDGE as channel_bridge
+from .web.chat import CHAT as viewer_chat
+
+
+# Added to Claude's system prompt when this server is loaded. It is the only
+# place Claude learns what a <channel> event from the viewer means and how to
+# answer it, so the workflow lives here rather than being re-explained by the
+# user every session.
+CHANNEL_INSTRUCTIONS = """\
+This server also runs a browser-based build viewer that can act as a chat window.
+
+Prompts typed into it arrive as <channel source="minecraft-builder" chat_id="...">
+events. Treat them as build requests from the user, exactly as if they had typed
+them in the terminal.
+
+When you handle one:
+1. Call show_structure to render the build. The user is looking at the viewer, so
+   showing beats describing — and the page updates itself, so they see each
+   revision without reloading.
+2. Call reply with a short sentence saying what you did, passing back the chat_id
+   from the event. Without a reply the browser shows nothing, so always send one,
+   including when you hit an error or need a clarification.
+
+Prefer shape operations over per-block lists. Only write files (.schem /
+.litematic) when the user asks for one; showing a build saves nothing to disk.
+"""
 
 # Initialize MCP server
-app = Server("minecraft-builder")
+app = Server("minecraft-builder", instructions=CHANNEL_INSTRUCTIONS)
 
 
 def _log(message: str) -> None:
@@ -275,6 +301,32 @@ json_file_path). Large footprints show stats only.""",
             }
         ),
         Tool(
+            name="reply",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzYyZGQ5NSIgZD0iTTIwIDJINGEyIDIgMCAwMC0yIDJ2MTJhMiAyIDAgMDAyIDJoNGw0IDQgNC00aDRhMiAyIDAgMDAyLTJWNGEyIDIgMCAwMC0yLTJ6Ii8+PC9zdmc+", mimeType="image/svg+xml")],
+            description="""Sends a message back to the build viewer's chat.
+
+Use this to answer a prompt that arrived as a <channel source="minecraft-builder">
+event, passing back the chat_id from that event. The user typed in the browser and
+is watching it, not the terminal, so a reply is the only thing they see — send one
+even when the answer is an error or a question.
+
+Keep it to a sentence or two; the build itself is shown with show_structure.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The message to show in the viewer's chat."
+                    },
+                    "chat_id": {
+                        "type": "string",
+                        "description": "The chat_id attribute from the inbound <channel> event."
+                    }
+                },
+                "required": ["text"]
+            }
+        ),
+        Tool(
             name="show_structure",
             icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzdmYjNmZiIgZD0iTTEyIDJsOSA1LjJ2OS42TDEyIDIyIDMgMTYuOFY3LjJMMTIgMnoiLz48cGF0aCBmaWxsPSIjNGE4MmQ2IiBkPSJNMTIgMTJsOS00Ljh2OS42TDEyIDIyeiIvPjwvc3ZnPg==", mimeType="image/svg+xml")],
             description="""Displays a structure in a 3D viewer in the user's browser.
@@ -326,6 +378,20 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             _log(f"preview_structure failed: {traceback.format_exc()}")
             return [TextContent(type="text", text=f"❌ Error previewing structure: {type(e).__name__}: {str(e)}")]
 
+    if name == "reply":
+        text = str(arguments.get("text") or "").strip()
+        if not text:
+            return [TextContent(type="text", text="❌ Error: reply text is empty.")]
+        viewer_chat.from_claude(text)
+        if not viewer_chat.bus.subscriber_count:
+            # Worth saying: the reply is recorded and will show up when the page
+            # connects, but right now nobody is reading it.
+            return [TextContent(
+                type="text",
+                text="✓ Reply recorded, but no viewer page is currently open."
+            )]
+        return [TextContent(type="text", text="✓ Sent to the viewer.")]
+
     if name == "show_structure":
         try:
             structure = _load_structure(arguments)
@@ -337,6 +403,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 )]
             version = viewer_state.put(structure)
             url = start_viewer()
+            # Nudge any open page to pull the new version immediately, instead of
+            # waiting for its next poll.
+            viewer_chat.announce_structure(version, structure.name)
             size = structure.calculate_size()
             return [TextContent(
                 type="text",
@@ -509,11 +578,24 @@ open — later versions appear without a reload."""
 
 async def main():
     """Run the MCP server."""
+    import asyncio
+
     from mcp.server.stdio import stdio_server
 
     async with stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
-        )
+        # Let the viewer push browser prompts into this session. The bridge needs
+        # the write stream and the loop it belongs to, because it is called from
+        # the HTTP server's thread. Declaring "claude/channel" is what makes
+        # Claude Code listen for them; without the channel enabled at startup the
+        # capability is simply ignored and the MCP tools behave as before.
+        channel_bridge.attach(asyncio.get_running_loop(), write_stream)
+        try:
+            await app.run(
+                read_stream,
+                write_stream,
+                app.create_initialization_options(
+                    experimental_capabilities={"claude/channel": {}}
+                ),
+            )
+        finally:
+            channel_bridge.detach()

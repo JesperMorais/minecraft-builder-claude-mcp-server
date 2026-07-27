@@ -16,6 +16,9 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
 - MCP integration for Claude Desktop and Claude Code
 - **3D viewer in your browser** — see the build as it is generated, and watch it
   change as you ask for revisions (see [3D viewer](#3d-viewer))
+- **Chat from the viewer** — type a build request in the browser and it reaches
+  your Claude Code session, with replies coming back in the same window (see
+  [Chatting from the viewer](#chatting-from-the-viewer))
 - WorldEdit-compatible `.schem` and Litematica-native `.litematic` output, so a
   build can be pasted instantly *or* built by hand in survival against a
   hologram (see [Importing into Minecraft](#importing-into-minecraft))
@@ -129,6 +132,11 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 - Orbit/pan/zoom, a block legend, and a **colour by operation** toggle that
   shows which shape operation placed each block
 - Blocks are flat colours, not Minecraft textures (see [3D viewer](#3d-viewer))
+
+**reply** - Sends a message back to the viewer's chat
+- Used when a prompt arrived from the browser rather than the terminal
+- Only meaningful with channels enabled (see
+  [Chatting from the viewer](#chatting-from-the-viewer))
 
 **open_output_folder** - Opens the output location in the OS file manager
 - Works on Windows (Explorer), macOS (Finder), and Linux (xdg-open)
@@ -275,6 +283,47 @@ It needs an internet connection on first load, because three.js is fetched from 
 CDN; to run fully offline, vendor `three.module.js` and `OrbitControls.js` next to
 `web/static/index.html` and point its import map at them.
 
+### Chatting from the viewer
+
+The viewer has a chat box. Anything you type there is delivered to the Claude Code
+session the MCP server is attached to, and Claude's answers come back in the same
+box — so you can drive a build entirely from the browser while watching it change.
+
+This uses Claude Code **channels**, which are a research preview, so it needs one
+extra step: the session has to be started with the channel enabled.
+
+```bash
+claude --dangerously-load-development-channels server:minecraft-builder
+```
+
+Confirm the warning dialog, and look for a line under the startup banner saying
+messages from `server:minecraft-builder` inject directly into the session. Then
+run any build request to start the viewer, and the chat box goes live.
+
+Requirements and limits, all imposed by the preview:
+
+- Channels need Anthropic authentication (a claude.ai account or a Console API
+  key). They are not available on Bedrock, Google Cloud or Microsoft Foundry.
+- A channel cannot be enabled mid-session — it has to be there at startup.
+- Custom channels are not on Anthropic's approved list, so the
+  `--dangerously-load-development-channels` flag is required rather than
+  `--channels`. Neither flag appears in `claude --help`.
+- On a Team or Enterprise plan an admin must enable channels first.
+
+**Everything else keeps working without the flag.** Start Claude Code normally and
+all the tools behave as documented; you just get no chat box, and prompts typed in
+the browser report that nothing is listening. The dot in the chat header shows
+which state you are in:
+
+| Dot | Meaning |
+|---|---|
+| green | A Claude session is attached; prompts will reach it |
+| red | No session listening — started without the flag, or Claude Code has exited |
+
+The reason the page has to say this explicitly: channel events are **not
+acknowledged**. A session without the channel enabled discards them silently, so
+"nothing happened" is otherwise indistinguishable from "Claude is thinking".
+
 ## JSON Structure Format
 
 A structure is defined by a `name` plus any mix of **`operations`** (declarative
@@ -363,10 +412,13 @@ minecraft-builder-claude-mcp-server/
 │   ├── style.py             # Style guide loader + compact checklist
 │   ├── preview.py           # ASCII preview + structure stats
 │   ├── paths.py             # Path resolution and file-manager opening
-│   ├── web/                 # Local 3D viewer
+│   ├── web/                 # Local 3D viewer + chat
 │   │   ├── app.py           # localhost HTTP server (stdlib only)
 │   │   ├── state.py         # Current structure + version history
 │   │   ├── payload.py       # Compact JSON for the browser
+│   │   ├── channel.py       # Pushes browser prompts into the session
+│   │   ├── chat.py          # Transcript + SSE event bus
+│   │   ├── __main__.py      # Run the viewer standalone
 │   │   └── static/          # index.html, viewer.js, style.css
 │   └── data/
 │       ├── style_guide.md   # The build style guide

@@ -1,6 +1,8 @@
-"""Tests for the viewer payload, state store and local HTTP server."""
+"""Tests for the viewer payload, state store, chat bus and local HTTP server."""
 
 import json
+import queue
+import threading
 import urllib.error
 import urllib.request
 
@@ -8,6 +10,7 @@ import pytest
 
 from minecraft_builder import web
 from minecraft_builder.schema import MinecraftStructure
+from minecraft_builder.web.chat import CHAT, Chat, EventBus
 from minecraft_builder.web.payload import VOXEL_STRIDE, build_payload, visible_coords
 from minecraft_builder.web.state import ViewerState
 
@@ -166,10 +169,112 @@ def test_state_payload_reports_the_current_version():
 def viewer():
     """A running viewer, torn down afterwards so the port is released."""
     web.STATE.clear()
+    CHAT.clear()
     url = web.ensure_running().rstrip("/")
     yield url
     web.shutdown()
     web.STATE.clear()
+    CHAT.clear()
+
+
+def _post(url, path, payload):
+    request = urllib.request.Request(
+        url + path,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return response.status, json.loads(response.read())
+
+
+def _read_sse(url, expected_frames, timeout=10):
+    """Collect SSE frames on a background thread.
+
+    Returns (frames, stop) where stop() ends the read. Frames are parsed from
+    ``data:`` lines; keepalive comments are skipped.
+    """
+    frames = []
+    done = threading.Event()
+
+    def reader():
+        try:
+            with urllib.request.urlopen(url + "/api/events", timeout=timeout) as response:
+                buffer = b""
+                while len(frames) < expected_frames and not done.is_set():
+                    chunk = response.read(1)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    if buffer.endswith(b"\n\n"):
+                        text = buffer.decode().strip()
+                        buffer = b""
+                        if text.startswith("data:"):
+                            frames.append(json.loads(text[len("data:"):].strip()))
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    return frames, done
+
+
+# --------------------------------------------------------------------------- #
+# Chat bus
+# --------------------------------------------------------------------------- #
+
+def test_bus_delivers_to_every_subscriber():
+    bus = EventBus()
+    a, b = bus.subscribe(), bus.subscribe()
+    assert bus.subscriber_count == 2
+    bus.publish({"type": "ping"})
+    assert a.get_nowait() == {"type": "ping"}
+    assert b.get_nowait() == {"type": "ping"}
+
+
+def test_unsubscribe_stops_delivery():
+    bus = EventBus()
+    subscriber = bus.subscribe()
+    bus.unsubscribe(subscriber)
+    assert bus.subscriber_count == 0
+    bus.publish({"type": "ping"})
+    with pytest.raises(queue.Empty):
+        subscriber.get_nowait()
+
+
+def test_full_subscriber_queue_drops_oldest_instead_of_blocking():
+    # A publish comes from the MCP thread, so a stalled browser tab must never
+    # be able to block it.
+    bus = EventBus()
+    subscriber = bus.subscribe()
+    for i in range(subscriber.maxsize + 20):
+        bus.publish({"n": i})
+    assert subscriber.full()
+    # The oldest were discarded, so the queue now starts past zero.
+    assert subscriber.get_nowait()["n"] > 0
+
+
+def test_chat_records_roles_and_delivery():
+    chat = Chat()
+    user = chat.from_user("build a hut", delivered=False)
+    assistant = chat.from_claude("done")
+    note = chat.note("heads up")
+    assert (user["role"], user["delivered"]) == ("user", False)
+    assert assistant["role"] == "assistant"
+    assert note["role"] == "system"
+    assert [m["id"] for m in chat.history()] == [1, 2, 3]
+
+
+def test_chat_transcript_is_bounded():
+    chat = Chat(max_transcript=5)
+    for i in range(12):
+        chat.from_claude(f"message {i}")
+    history = chat.history()
+    assert len(history) == 5
+    # Ids keep climbing so a reconnecting page can dedupe correctly.
+    assert history[-1]["id"] == 12
 
 
 def _get(url, path):
@@ -242,3 +347,112 @@ def test_payload_is_not_cached(viewer):
     web.STATE.put(_solid_cube(3))
     with urllib.request.urlopen(viewer + "/api/structure", timeout=5) as response:
         assert response.headers.get("Cache-Control") == "no-store"
+
+
+# --------------------------------------------------------------------------- #
+# Prompt in, events out
+# --------------------------------------------------------------------------- #
+
+def test_prompt_reports_undelivered_with_no_session_attached(viewer):
+    # No MCP session in a test, so this is the exact path a user hits when they
+    # forget --dangerously-load-development-channels.
+    status, body = _post(viewer, "/api/prompt", {"text": "build a hut"})
+    assert status == 200
+    assert body["delivered"] is False
+    assert body["message"]["role"] == "user"
+
+    # The transcript must explain why, not just silently record the prompt.
+    roles = [m["role"] for m in CHAT.history()]
+    assert roles == ["user", "system"]
+    assert "development-channels" in CHAT.history()[1]["text"]
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"text": ""}, 400),
+    ({"text": "   "}, 400),
+    ({}, 400),
+])
+def test_empty_prompts_are_rejected(viewer, payload, expected):
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _post(viewer, "/api/prompt", payload)
+    assert excinfo.value.code == expected
+
+
+def test_oversized_prompt_is_rejected(viewer):
+    from minecraft_builder.web.app import MAX_PROMPT_BYTES
+
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _post(viewer, "/api/prompt", {"text": "x" * (MAX_PROMPT_BYTES + 100)})
+    assert excinfo.value.code == 413
+
+
+def test_post_to_unknown_path_is_404(viewer):
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _post(viewer, "/api/nope", {"text": "hi"})
+    assert excinfo.value.code == 404
+
+
+def test_events_stream_opens_with_a_snapshot(viewer):
+    web.STATE.put(_solid_cube(3))
+    CHAT.from_claude("earlier message")
+
+    frames, stop = _read_sse(viewer, expected_frames=1)
+    try:
+        _wait_for(lambda: len(frames) >= 1)
+        snapshot = frames[0]
+        assert snapshot["type"] == "snapshot"
+        # Version numbering is process-global and never restarts, so compare
+        # against the store rather than hard-coding a number.
+        assert snapshot["version"] == web.STATE.version
+        # History is replayed so a page opened late is not blank.
+        assert [m["text"] for m in snapshot["messages"]] == ["earlier message"]
+    finally:
+        stop.set()
+
+
+def test_events_stream_pushes_replies_and_structure_updates(viewer):
+    frames, stop = _read_sse(viewer, expected_frames=3)
+    try:
+        _wait_for(lambda: len(frames) >= 1)  # snapshot first
+        CHAT.from_claude("added a doorway")
+        CHAT.announce_structure(7, "hut")
+        _wait_for(lambda: len(frames) >= 3)
+
+        kinds = [f["type"] for f in frames]
+        assert kinds == ["snapshot", "message", "structure"]
+        assert frames[1]["message"]["text"] == "added a doorway"
+        assert frames[2]["version"] == 7
+    finally:
+        stop.set()
+
+
+def test_status_reports_no_attached_session(viewer):
+    _, _, body = _get(viewer, "/api/status")
+    status = json.loads(body)
+    assert status["attached"] is False
+    assert status["events_sent"] == 0
+
+
+def test_status_counts_connected_viewers(viewer):
+    _, _, body = _get(viewer, "/api/status")
+    assert json.loads(body)["viewers"] == 0
+
+    frames, stop = _read_sse(viewer, expected_frames=1)
+    try:
+        _wait_for(lambda: len(frames) >= 1)
+        _, _, body = _get(viewer, "/api/status")
+        assert json.loads(body)["viewers"] == 1
+    finally:
+        stop.set()
+
+
+def _wait_for(predicate, timeout=5.0, interval=0.02):
+    """Poll until ``predicate`` holds, rather than sleeping a fixed guess."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(interval)
+    raise AssertionError("condition not met within timeout")
