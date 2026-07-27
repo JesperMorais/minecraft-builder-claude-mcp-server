@@ -349,11 +349,14 @@ function checkForSilence() {
   if (awaitingReplySince === null || warnedAboutSilence) return;
   if (Date.now() - awaitingReplySince < REPLY_TIMEOUT_MS) return;
   warnedAboutSilence = true;
+  // No trailing punctuation after the flag: this text gets copy-pasted, and a
+  // sentence period lands inside the server name, which Claude Code then reports
+  // as "no MCP server configured with that name".
   localNote(
-    'No response yet. The prompt reached the session, but Claude may still be '
-    + 'working — or the channel is not enabled. Channels only deliver when '
-    + 'Claude Code was started with '
-    + '--dangerously-load-development-channels server:minecraft-builder.',
+    'No response yet. Claude may still be working — or the channel is not '
+    + 'enabled. Channels only deliver when Claude Code was started from the '
+    + 'project root with this flag:\n'
+    + '--dangerously-load-development-channels server:minecraft-builder',
   );
 }
 

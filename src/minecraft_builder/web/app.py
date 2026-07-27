@@ -144,10 +144,14 @@ class _Handler(BaseHTTPRequestHandler):
         delivered = BRIDGE.push(text, {"chat_id": "web", "sender": "viewer"})
         message = CHAT.from_user(text, delivered=delivered)
         if not delivered:
+            # The flag ends the message with no trailing punctuation on purpose:
+            # this line gets copy-pasted, and a sentence period lands inside the
+            # server name, which Claude Code reports as "no MCP server configured
+            # with that name" — a confusing second failure on top of the first.
             CHAT.note(
                 "That prompt was not delivered: no Claude session is listening. "
-                "Start Claude Code with "
-                "--dangerously-load-development-channels server:minecraft-builder."
+                "Restart Claude Code from the project root with this flag:\n"
+                "--dangerously-load-development-channels server:minecraft-builder"
             )
         self._send_json({"delivered": delivered, "message": message})
 
