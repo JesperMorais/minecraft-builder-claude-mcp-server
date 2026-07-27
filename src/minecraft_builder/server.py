@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from .schema import MinecraftStructure
 from .converter import SchematicConverter
+from .style import STYLE_CHECKLIST, load_style_guide
 from .paths import (
     open_in_file_manager,
     resolve_input_path,
@@ -100,6 +101,8 @@ INPUT METHODS:
 - Small/medium builds: provide the JSON directly in structure_json.
 - Very large builds: write the JSON to a file and pass json_file_path instead.
 
+""" + STYLE_CHECKLIST + """
+
 Before calling this tool, ask the user where they would like to save the .schem file.""",
             inputSchema={
                 "type": "object",
@@ -156,6 +159,29 @@ file easily.""",
                 },
                 "required": ["folder_path"]
             }
+        ),
+        Tool(
+            name="get_build_style_guide",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHJlY3QgZmlsbD0iIzhkOGQ4ZCIgeD0iMSIgeT0iNCIgd2lkdGg9IjciIGhlaWdodD0iMTYiLz48cmVjdCBmaWxsPSIjOWM2YjNmIiB4PSI4IiB5PSI0IiB3aWR0aD0iNyIgaGVpZ2h0PSIxNiIvPjxyZWN0IGZpbGw9IiM0YTY3NDEiIHg9IjE1IiB5PSI0IiB3aWR0aD0iOCIgaGVpZ2h0PSIxNiIvPjwvc3ZnPg==", mimeType="image/svg+xml")],
+            description="""Returns the Minecraft build style guide: how to make a structure look GOOD, not just valid.
+
+Call this BEFORE designing any build larger than a few dozen blocks. You cannot
+see the generated structure — there is no render or feedback loop — so build
+quality is decided entirely by the rules you apply before emitting JSON.
+
+Covers: block palettes (3-5 blocks at 50/30/20, with ready-made themed palettes
+for medieval, castle, cottage, modern, japanese, desert, nordic, industrial,
+fantasy and nether), depth techniques that stop walls reading as flat, roof pitch
+and proportion numbers, silhouette, lighting, ground transitions, a cookbook of
+shape-operation recipes (gable roof, round tower, arch, battlements, plinth and
+cornice), anti-patterns, and a pre-flight checklist to run before building.
+
+Takes no arguments.""",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False
+            }
         )
     ]
 
@@ -163,6 +189,9 @@ file easily.""",
 @app.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls."""
+
+    if name == "get_build_style_guide":
+        return [TextContent(type="text", text=load_style_guide())]
 
     # "open_folder_in_explorer" kept as a backwards-compatible alias.
     if name in ("open_output_folder", "open_folder_in_explorer"):
