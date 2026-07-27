@@ -48,24 +48,37 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
    pip install -e .
    ```
 
-4. Configure Claude Desktop or Claude Code:
+4. Register the server with your client.
 
-   Edit your config file:
-   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - **Linux**: `~/.config/Claude/claude_desktop_config.json`
+   **Claude Code** reads [`.mcp.json`](.mcp.json) from the project root, which is
+   already checked in. **Change the `command` to a Python that has this package
+   installed** — the committed path points at a local `.venv`, and the usual
+   failure is leaving it as a bare `python` that lacks the package:
 
-   Add this configuration:
    ```json
    {
      "mcpServers": {
        "minecraft-builder": {
-         "command": "python",
-         "args": ["-m", "minecraft_builder"]
+         "command": "/path/to/.venv/bin/python",
+         "args": ["-m", "minecraft_builder"],
+         "timeout": 600000
        }
      }
    }
    ```
+
+   The first session in the project asks for consent — *"New MCP server found in
+   this project: minecraft-builder"*. Choose **Use this MCP server**. Verify with
+   `claude mcp list`; the server must appear as **Connected** before anything
+   below will work, and it is required for
+   [chat from the viewer](#chatting-from-the-viewer).
+
+   **Claude Desktop** uses its own config file instead:
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+   Use the same `mcpServers` block as above.
 
 5. Restart Claude Desktop/Code completely
 
@@ -289,8 +302,19 @@ The viewer has a chat box. Anything you type there is delivered to the Claude Co
 session the MCP server is attached to, and Claude's answers come back in the same
 box — so you can drive a build entirely from the browser while watching it change.
 
-This uses Claude Code **channels**, which are a research preview, so it needs one
-extra step: the session has to be started with the channel enabled.
+This uses Claude Code **channels**, which are a research preview, so it needs two
+things: the server registered under that exact name, and a session started with
+the channel enabled.
+
+**First check the server is registered.** `server:minecraft-builder` names an entry
+in your MCP config — with no such entry the flag has nothing to attach to, and
+Claude Code starts normally with no error and no channel:
+
+```bash
+claude mcp list        # minecraft-builder must be listed and Connected
+```
+
+If it is missing, go back to [Setup step 4](#setup). Then:
 
 ```bash
 claude --dangerously-load-development-channels server:minecraft-builder
@@ -442,8 +466,31 @@ minecraft-builder-claude-mcp-server/
 **MCP server not appearing:**
 - Completely restart Claude Desktop
 - Verify config file location and syntax
-- Check Python is accessible: `python --version`
+- Run `claude mcp list` (Claude Code) — the server must show as **Connected**
+- Check the `command` in your config is a Python that can import the package:
+  `<that python> -c "import minecraft_builder"`. A bare `python` often is not.
 - Ensure package is installed: `pip list | grep minecraft-builder`
+
+**Chat box says "no Claude session listening":**
+
+Channel events are unacknowledged, so every cause looks identical from the
+browser. Work through it in this order:
+
+1. **Is the server registered?** `claude mcp list` must show `minecraft-builder`
+   as Connected. `--dangerously-load-development-channels server:minecraft-builder`
+   refers to that entry by name; with no entry, Claude Code starts with no error
+   and no channel. This is the most common cause.
+2. **Was the flag passed?** It cannot be enabled mid-session. On startup, a dim
+   line under the banner should say messages from `server:minecraft-builder`
+   inject directly into this session. No line means no channel.
+3. **Did you accept the consent prompt?** The first session in a new project asks
+   before using a server from `.mcp.json`.
+4. **Check the name matches.** The part after `server:` is the key in
+   `mcpServers`, not the package or directory name.
+5. **Org policy**, on Team/Enterprise plans — an admin must enable channels. A
+   startup warning names this if it applies.
+6. **Check the debug log** at `~/.claude/debug/<session-id>.txt` for the server's
+   stderr if it failed to start.
 
 **Installation errors:**
 - Use Python 3.10 or higher
