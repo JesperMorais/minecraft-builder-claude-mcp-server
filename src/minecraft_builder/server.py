@@ -101,6 +101,10 @@ OPERATIONS (each needs an "op" and a "block"):
 - cylinder:   {"op":"cylinder","center":[x,y,z],"radius":3,"height":10,"axis":"y","block":"stone","hollow":false}
 - line:       {"op":"line","start":[..],"end":[..],"block":"glowstone"}
 - pyramid:    {"op":"pyramid","center":[x,y,z],"base":6,"axis":"y","block":"sandstone","hollow":false}
+- dome:       hemisphere.  {"op":"dome","center":[x,y,z],"radius":6,"axis":"y","block":"glass","hollow":true}
+- cone:       base->apex taper (spires, round-tower roofs).  {"op":"cone","center":[x,y,z],"radius":6,"height":7,"axis":"y","block":"dark_oak_planks","hollow":true}
+- ellipsoid:  sphere with independent radii (eggs, blobs).  {"op":"ellipsoid","center":[x,y,z],"rx":5,"ry":7,"rz":5,"block":"quartz_block","hollow":true}
+- torus:      ring.  {"op":"torus","center":[x,y,z],"major_radius":6,"minor_radius":2,"axis":"y","block":"prismarine"}
 - block:      single block.  {"op":"block","pos":[x,y,z],"block":"torch"}
 - replace:    swap blocks in a region.  {"op":"replace","start":[..],"end":[..],"from_block":"stone","to_block":"air"}
 

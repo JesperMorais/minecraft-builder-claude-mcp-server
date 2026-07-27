@@ -7,8 +7,9 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
 ## Features
 
 - Natural language to Minecraft structure conversion
-- **Shape primitives** (cuboid, hollow box, sphere, cylinder, line, pyramid) so
-  large builds are a handful of operations instead of thousands of blocks
+- **Shape primitives** (cuboid, hollow box, sphere, cylinder, cone, dome,
+  ellipsoid, torus, line, pyramid) so large builds are a handful of operations
+  instead of thousands of blocks
 - **Build style guide** served to Claude as a tool, so structures come out
   looking designed rather than merely valid — palettes, depth, proportion,
   roof pitch, lighting (see [Build quality](#build-quality))
@@ -242,6 +243,10 @@ Available operations (every op takes a `block`, except `replace`):
 | `cylinder` | Cylinder / tube | `center`, `radius`, `height`, `axis`, `hollow` |
 | `line` | 3D line | `start`, `end` |
 | `pyramid` | Step pyramid | `center`, `base`, `axis`, `hollow` |
+| `dome` | Hemisphere (open-based when hollow) | `center`, `radius`, `axis`, `hollow` |
+| `cone` | Base→apex taper (spires, roofs) | `center`, `radius`, `height`, `axis`, `hollow` |
+| `ellipsoid` | Sphere with independent radii | `center`, `rx`, `ry`, `rz`, `hollow` |
+| `torus` | Ring | `center`, `major_radius`, `minor_radius`, `axis`, `hollow` |
 | `block` | Single block | `pos` |
 | `replace` | Swap blocks in a region | `start`, `end`, `from_block`, `to_block` |
 
