@@ -1,160 +1,282 @@
-# Design: Hosted Web App for Minecraft Builder
+# Design: Web UI for Minecraft Builder
 
 **Status:** proposal
 **Date:** 2026-07-27
-**Decision taken:** standalone hosted website with its own Claude API key (not a local
-companion to Claude Desktop/Code).
+
+Two stages, deliberately ordered:
+
+- **Stage 1 — local, Claude Code drives it.** A Claude Code session starts the site. You
+  type in the browser, the prompt lands in that session, Claude builds, the 3D view updates.
+  No API key, no API cost, no auth, no hosting. **This is what gets built first.**
+- **Stage 2 — hosted site.** Later. Its own API key and agent loop. Recorded in §11 so
+  Stage 1 doesn't paint us into a corner.
 
 ---
 
-## 1. Purpose and scope
+## 1. The mechanism: Claude Code *channels*
 
-Turn this repo from an MCP server that writes `.schem` files into a hosted product where a
-user can:
+The obvious objection to Stage 1 is that MCP is model-driven — a website cannot push a
+prompt into a running Claude session. That objection is out of date. Claude Code has a
+feature for exactly this:
 
-1. Describe a build in natural language and watch it appear in **3D in the browser**.
-2. **Mark up** what they don't like — click a block, drag a box, add a note.
-3. Say "apply my notes" and have the build revised in place.
-4. **Export** to a file that drops straight into Minecraft, including a blueprint-mod
-   format (`.litematic`) so the build can be built by hand in survival.
+> **A channel is an MCP server that pushes events into your running Claude Code session.**
+> Channels can be two-way: Claude reads the event and replies back through the same channel.
 
-Out of scope for v1: multiplayer/collaborative editing, in-browser manual block placement
-(the model is the editor), server-side Minecraft integration, mobile.
+There is even an official demo channel, **fakechat**, that serves a chat UI on localhost,
+pushes what you type into the session, and shows Claude's reply back in the browser. That is
+precisely the product shape we want — we are adding a 3D viewport and structure tools to it.
 
-**Existing surfaces are kept.** The MCP server stays and becomes a second thin client over
-the same core (§4). Both must not diverge.
+**Contract** (from the [channels reference](https://code.claude.com/docs/en/channels-reference)):
+
+| Piece | Value |
+|---|---|
+| Capability | `capabilities.experimental["claude/channel"] = {}` — presence registers the listener |
+| Push a prompt in | notification `notifications/claude/channel`, params `{content: str, meta: Record<str,str>}` |
+| How Claude sees it | `<channel source="minecraft-builder" chat_id="1">build a stone hut</channel>` |
+| Claude replies out | a normal MCP tool (conventionally `reply`) that we implement |
+| Steer Claude | the `instructions` string on the Server constructor — injected into Claude's system prompt |
+| Enable | `claude --dangerously-load-development-channels server:minecraft-builder` |
+
+### 1.1 Verified: this works from Python
+
+The documented examples are all Bun, and the reference says the only hard requirement is
+"the MCP SDK and a Node.js-compatible runtime". That would have forced a second process,
+because our core is Python. It turns out not to be a constraint — the Python SDK does both
+halves. Checked against the SDK in `.venv` and against the real `server.py`:
+
+```python
+app.create_initialization_options(NotificationOptions(), {"claude/channel": {}})
+# -> {"experimental": {"claude/channel": {}}, "tools": {"listChanged": false}}
+```
+
+and a plain Pydantic model serializes to the exact frame the contract specifies:
+
+```json
+{"method":"notifications/claude/channel",
+ "params":{"content":"build me a stone hut","meta":{"chat_id":"1","sender":"web"}},
+ "jsonrpc":"2.0"}
+```
+
+**So Stage 1 is a single Python process**: existing MCP server + channel capability +
+localhost HTTP/SSE + static UI, importing `schema.py` and `converter.py` directly. No Bun,
+no IPC, no duplicated geometry model.
+
+`ServerSession.send_notification` is typed `SendNotificationT` but only calls
+`.model_dump()` on it, so a custom notification model passes at runtime. Pin the `mcp`
+version and add a test asserting the serialized frame, since this relies on the SDK not
+tightening that annotation.
+
+### 1.2 Preview caveats — read before committing
+
+- **Research preview.** The `--channels` flag syntax and the protocol contract may change.
+  Neither flag appears in `claude --help`.
+- **Custom channels are not on the allowlist**, so ours needs
+  `--dangerously-load-development-channels server:minecraft-builder`. The `server:` prefix is
+  for a bare `.mcp.json` entry; `plugin:` is for a packaged plugin. Getting on the real
+  allowlist requires an Anthropic partner contact — not a path we should plan around.
+- **Requires Anthropic auth** via claude.ai or a Console API key. Not available on Bedrock,
+  Google Cloud, or Microsoft Foundry.
+- **Enabling requires restarting Claude Code.** A channel cannot be turned on mid-session.
+- Personal Pro/Max accounts skip the org checks entirely. Team/Enterprise needs an admin to
+  set `channelsEnabled`.
+
+**The failure mode that will cost the most debugging time:** notifications are
+fire-and-forget with no acknowledgement. If the session wasn't started with the flag, or org
+policy blocks it, **events are dropped silently** — the browser posts a prompt and nothing
+whatsoever happens. Mitigation in §4.3.
 
 ---
 
 ## 2. What exists today
 
-| File | Lines | Role | Reuse in web app |
+| File | Lines | Role | Stage 1 use |
 |---|---:|---|---|
-| `schema.py` | 241 | Pydantic models: `MinecraftStructure`, 8 shape ops, `expand()` | **Core.** Becomes the agent's tool schema *and* the API wire format. |
-| `shapes.py` | 192 | Pure geometry generators, coordinate iterators | **Core, unchanged.** |
-| `converter.py` | 73 | `expand()` → Sponge v2 `.schem` via `mcschematic` | Core; gains a `.litematic` sibling. |
-| `versions.py` | 89 | 1.19.4 / 1.20.4 / 1.21.4 registries, fuzzy block-ID validation | **Core, unchanged.** Feeds a validation tool result. |
-| `paths.py` | 122 | Cross-platform path + file-manager helpers | Local/MCP only. Not used server-side. |
-| `server.py` | 326 | MCP stdio server, 2 tools | Stays as one of two clients. |
-| `data/blocks_*.txt` | 3 files | Vendored block registries from PrismarineJS minecraft-data | Also seeds the renderer colour table (§7). |
+| `schema.py` | 241 | `MinecraftStructure`, 8 shape ops, `expand()` | **Core.** Tool schema + wire format. |
+| `shapes.py` | 192 | Pure geometry generators | **Core, unchanged.** |
+| `converter.py` | 73 | `expand()` → Sponge v2 `.schem` | Core; gains `to_litematic()`. |
+| `versions.py` | 89 | Version registries + fuzzy block validation | **Core, unchanged.** |
+| `paths.py` | 122 | Cross-platform path / file-manager helpers | Used — we are local. |
+| `server.py` | 326 | MCP stdio server, 2 tools | **Extended in place** (§4). |
+| `data/blocks_*.txt` | 3 | Vendored PrismarineJS registries | Also seeds the renderer colour table. |
 
-The important property: **`MinecraftStructure.expand()` already returns exactly what a voxel
-renderer needs** — `Dict[(x, y, z) -> block_id_string]`. The repo is unusually well-shaped
-for this.
+`MinecraftStructure.expand()` already returns `Dict[(x,y,z) -> block_id]` — exactly a voxel
+renderer's input. The repo is unusually well-shaped for this.
 
-### The central design principle
-
-The **operations list is the source code**; `.schem` / `.litematic` are compiled binaries.
-The web app edits and versions the JSON, renders from `expand()`, and only compiles on
-export. Nothing in the product should read a schematic file back.
+**Central principle:** the operations list is the source code; `.schem`/`.litematic` are
+compiled artifacts. The UI edits and versions JSON, renders from `expand()`, and only
+compiles on export. Nothing reads a schematic back.
 
 ---
 
-## 3. Architecture
+## 3. Stage 1 architecture
 
 ```
-┌──────────────────────── Browser (React + TS) ────────────────────────┐
-│  Chat pane        3D viewport (three.js)      Annotation tray        │
-│      │                    │                          │              │
-│      │  POST /chat        │  structure JSON          │ POST /annot.  │
-│      │  (SSE down)        │  (from SSE events)       │              │
-└──────┼────────────────────┴──────────────────────────┴──────────────┘
-       │
-┌──────▼─────────────────── FastAPI (Python 3.11+) ───────────────────┐
-│  routes/          chat (SSE) · structures · annotations · export     │
-│  agent/           Claude tool-use loop  ──►  Anthropic API          │
-│  tools/           6 custom tools (§6.2) — the only thing Claude sees │
-│  core/  ◄── existing src/minecraft_builder (schema, shapes, convert) │
-│  store/           Postgres: users, structures, versions, annotations │
-│  export/          .schem (mcschematic) · .litematic (litemapy)       │
-└──────┬──────────────────────────────────────────────────────────────┘
-       │
-   Object storage (exported files, 24h signed URLs)
+┌──── Browser · http://127.0.0.1:8791 ─────────────────────────────┐
+│  chat pane        3D viewport (three.js)      annotation tray    │
+└───┬──────────────────────▲───────────────────────┬───────────────┘
+    │ POST /prompt         │ GET /events (SSE)     │ POST /annotations
+    ▼                      │                       ▼
+┌───────────── ONE Python process ─────────────────────────────────┐
+│  web/  aiohttp (or uvicorn) on 127.0.0.1 — static UI + JSON API  │
+│  channel/  notifications/claude/channel  ──────────────┐         │
+│  tools/  reply · show_structure · get_annotations · export        │
+│  state/  current structure + version list + annotations (memory  │
+│          + JSON file on disk, no database)                       │
+│  core/   schema · shapes · converter · versions  (imported)      │
+└──────────────────────────┬───────────────────────────────┼───────┘
+                    stdio  │ (Claude Code spawned us)      │
+                           ▼                               │
+                  ┌────────────────────────┐               │
+                  │  Claude Code session   │◄──────────────┘
+                  │  = the agent. No API   │  <channel …>prompt</channel>
+                  │  key, no loop to write │
+                  └────────────────────────┘
 ```
 
-**Why Python for the backend:** `schema.py` is the tool schema. Rewriting the operation
-model in TypeScript would mean maintaining two definitions of the geometry and guaranteeing
-they drift. FastAPI + Pydantic v2 is already the stack this repo implies.
+The thing to notice: **there is no agent layer to build.** Stage 1 has no tool-use loop, no
+model selection, no prompt caching, no streaming assembly, no token budget, no cost. Claude
+Code is the agent. That deletes most of the engineering in the original hosted design and is
+why this ordering is right.
+
+**Round trip:** browser `POST /prompt` → notification into the session → Claude reasons,
+calls `show_structure(...)` → tool handler pushes onto an `asyncio.Queue` → SSE to browser →
+viewport re-renders → Claude calls `reply("added a doorway on the south face")` → chat pane.
 
 ---
 
-## 4. Repo layout
+## 4. Changes to `server.py`
 
-Keep the core importable and framework-free; add the web app beside it.
-
-```
-src/minecraft_builder/          # unchanged public core
-├── schema.py                   # + expand_with_provenance()   (§5.1)
-├── shapes.py
-├── converter.py                # + to_litematic()             (§9)
-├── versions.py
-├── colors.py                   # NEW: block_id -> RGB          (§7)
-├── paths.py                    # local/MCP only
-└── server.py                   # MCP client (unchanged behaviour)
-
-src/minecraft_web/              # NEW: the hosted app
-├── main.py                     # FastAPI app factory
-├── settings.py                 # pydantic-settings; no secrets in code
-├── routes/
-│   ├── chat.py                 # POST /api/chat  -> SSE stream
-│   ├── structures.py           # CRUD + version history
-│   ├── annotations.py          # create / list / resolve
-│   └── export.py               # POST /api/export -> signed URLs
-├── agent/
-│   ├── loop.py                 # Claude tool-use loop
-│   ├── prompt.py               # system prompt (STABLE — see §6.3)
-│   └── events.py               # SSE event envelope
-├── tools/
-│   └── structure_tools.py      # the 6 tools
-├── store/
-│   ├── models.py               # SQLAlchemy
-│   └── repo.py
-└── export/
-    └── artifacts.py
-
-web/                            # NEW: frontend
-├── src/render/                 # three.js InstancedMesh voxel renderer
-├── src/annotate/               # picking, box select, notes
-├── src/chat/
-└── src/api/                    # typed client, generated from OpenAPI
-```
-
----
-
-## 5. Core data-model changes
-
-Two small additive changes to `src/minecraft_builder`. Neither breaks the MCP server.
-
-### 5.1 Operation provenance — the change that makes feedback work
-
-Naïve markup gives the model `{"pos": [7,4,3], "note": "hate this"}`. Weak. If we track
-*which operation placed each block*, markup becomes *"operation #4, the roof pyramid, is
-too steep"* — a targeted edit to one operation instead of a coordinate guess. This is the
-highest-value change in the whole design and it is ~15 lines.
-
-A before/after diff of the block map cannot recover this: an operation that overwrites a
-coordinate with the *same* block ID is invisible to a diff, yet it is still the last writer.
-Provenance has to be recorded at write time. Since every `apply()` implementation writes via
-`blocks[coord] = block`, a recording dict captures all of them with **no change to any
-operation class**:
+### 4.1 Declare the channel and instruct Claude
 
 ```python
-# schema.py — additive; expand() keeps its current signature and behaviour.
-Provenance = Dict[Tuple[int, int, int], int]   # coord -> index into a combined op list
+# __main__.py / server.py
+async def main():
+    async with stdio_server() as (read, write):
+        await app.run(read, write, app.create_initialization_options(
+            NotificationOptions(),
+            experimental_capabilities={"claude/channel": {}},
+        ))
+```
+
+`Server(...)`'s `instructions` is the single most important knob in Stage 1 — it lands in
+Claude's system prompt and is how we get the workflow right without the user re-explaining
+it every session. It should say roughly:
+
+> Prompts from the Minecraft build UI arrive as `<channel source="minecraft-builder"
+> chat_id="…">`. They are build requests. Call `show_structure` to render — the user sees the
+> result in 3D immediately, so prefer showing a build over describing one. Use shape
+> `operations`, not per-block lists. After showing, call `reply` with one short sentence,
+> passing the `chat_id` from the tag. When the user asks you to apply their notes, call
+> `get_annotations` first; each annotation names the operation index it refers to, so prefer
+> editing that operation over regenerating the whole structure. Only call `export` when asked
+> for a file.
+
+### 4.2 Tools
+
+Keep both existing tools (the plain MCP workflow must keep working for users who aren't
+running a channel). Add four:
+
+| Tool | Purpose |
+|---|---|
+| `show_structure` | Accepts a full structure; validates, stores as a new version, pushes to the viewport. **The tool the whole product hangs on.** |
+| `patch_operations` | `[{index, action: replace\|insert\|delete, operation}]`. Makes "the roof is too steep" a one-op edit instead of re-emitting 200 ops. |
+| `get_annotations` | Open markup, each pre-resolved to an operation index + summary (§6.1, §8). |
+| `reply` | Channel reply → chat pane. Params `{chat_id, text}` per convention. |
+
+Notes:
+- Validate through Pydantic inside every tool and return the `ValidationError` text with
+  `is_error: true` so Claude self-corrects. Never let it escape as a traceback.
+- Reuse `validate_block_ids()` and return unknown blocks with fuzzy suggestions in the result
+  — that already works in this repo; keep the behaviour.
+- Cap total voxels (suggest 2 000 000) *before* calling `expand()`. A cuboid from
+  `[-100000,…]` to `[100000,…]` is a trivial OOM, and here it would take the user's Claude
+  Code session down with it.
+
+### 4.3 Liveness — the silent-drop problem
+
+Because notifications are unacknowledged, the browser cannot tell "Claude is thinking" from
+"the channel never registered". Handle it explicitly:
+
+- Bind the HTTP server only after `mcp.connect()` succeeds, so a reachable page implies
+  Claude Code did spawn us.
+- Show a **"waiting for Claude…"** state on `POST /prompt`, and after ~20s with no tool call
+  surface the actual likely cause: *"No response. Was Claude Code started with
+  `--dangerously-load-development-channels server:minecraft-builder`?"*
+- Log every outbound notification to stderr — it shows up in
+  `~/.claude/debug/<session-id>.txt`.
+
+### 4.4 Config
+
+```json
+// .mcp.json
+{"mcpServers": {"minecraft-builder": {
+  "command": "python", "args": ["-m", "minecraft_builder"], "timeout": 600000}}}
+```
+
+Launch: `claude --dangerously-load-development-channels server:minecraft-builder`
+
+Two gotchas worth writing into the README: **`meta` keys must be identifiers** — letters,
+digits, underscores; keys with hyphens are *silently dropped*. And if Claude is mid-turn when
+several prompts arrive, they are **delivered together on the next turn** and handled as a
+group, so the UI should discourage rapid-fire prompting or queue visibly.
+
+The first `reply` call triggers a permission prompt in the terminal. Pre-allowlist
+`mcp__minecraft-builder__reply` and `mcp__minecraft-builder__show_structure` in project
+settings so the loop doesn't stall on approval every session.
+
+---
+
+## 5. Repo layout
+
+```
+src/minecraft_builder/          # core stays importable and framework-free
+├── schema.py                   # + expand_with_provenance()      (§6.1)
+├── shapes.py
+├── converter.py                # + to_litematic()                (§9)
+├── versions.py
+├── colors.py                   # NEW  block_id -> RGB            (§7)
+├── paths.py
+├── server.py                   # + channel capability, 4 tools   (§4)
+├── channel.py                  # NEW  notification model + emit helper
+├── state.py                    # NEW  structure versions + annotations
+└── web/
+    ├── app.py                  # NEW  localhost HTTP + SSE
+    └── static/                 # NEW  built frontend bundle
+
+web/                            # frontend source
+├── src/render/                 # three.js InstancedMesh voxel renderer
+├── src/annotate/               # picking, box select, notes
+└── src/chat/
+```
+
+---
+
+## 6. Core data-model changes
+
+Both additive; neither changes existing behaviour.
+
+### 6.1 Operation provenance — the change that makes feedback work
+
+Naïve markup gives Claude `{"pos": [7,4,3], "note": "hate this"}`. Weak. Tracking *which
+operation placed each block* makes it *"operation #4, the roof pyramid, is too steep"* — a
+targeted edit instead of a coordinate guess.
+
+A before/after diff **cannot** recover this: an operation that overwrites a coordinate with
+the *same* block ID is invisible to a diff yet is still the last writer. Provenance must be
+recorded at write time. Since every `apply()` writes through `blocks[coord] = block`, a
+recording dict captures all of them with **no change to any operation class**:
+
+```python
+Provenance = Dict[Tuple[int, int, int], int]   # coord -> index in the combined op list
 
 
 class _RecordingBlockMap(dict):
-    """A BlockMap that remembers which operation index last wrote each coordinate.
-
-    Every ``_Operation.apply()`` writes through ``blocks[coord] = block``, so
-    overriding ``__setitem__`` records provenance for all of them — including
-    overwrites with an identical block ID, which a before/after diff would miss.
-    """
+    """A BlockMap that remembers which operation index last wrote each coordinate."""
 
     def __init__(self) -> None:
         super().__init__()
         self.origin: Provenance = {}
-        self.index = 0          # set by the caller before each operation runs
+        self.index = 0          # caller sets this before each operation runs
 
     def __setitem__(self, key, value) -> None:
         super().__setitem__(key, value)
@@ -178,263 +300,94 @@ def expand_with_provenance(self) -> Tuple[BlockMap, Provenance]:
     return dict(block_map), block_map.origin
 ```
 
-`expand()` then becomes `return self.expand_with_provenance()[0]`, so there is exactly one
-resolution path and the two can never disagree. `ReplaceOp` reads via `blocks.get(c)`, which
-`dict` provides unchanged.
+`expand()` becomes `return self.expand_with_provenance()[0]`, so there is one resolution path
+and the two cannot disagree. `ReplaceOp` reads via `blocks.get(c)`, which `dict` provides.
 
 *Prototyped against the current `schema.py` and confirmed: block map identical to
 `expand()`; a doorway carved with `air` attributes to the carving op; a wall voxel to the
-`hollow_box`; an overwrite with an **identical** block ID correctly attributes to the later
-op (a diff reports the earlier one); `replace` and negative coordinates both behave.*
+`hollow_box`; an overwrite with an **identical** block ID correctly attributes to the later op
+(a diff reports the earlier one); `replace` and negative coordinates both behave.*
 
-### 5.2 Coordinate space — a real bug waiting to happen
+### 6.2 Coordinate space — a real bug waiting to happen
 
 `converter.py:51-58` re-centres the build so its minimum corner sits at the origin. **The
-viewer must render in authoring coordinates**, not export coordinates, or an annotation on
-a block will map to the wrong operation.
-
-Rule: authoring coords are canonical everywhere in the product (API, viewer, annotations,
-model context). The min-corner offset is computed *only* inside the export step and never
-leaves it. Add a regression test that annotates a build with negative coordinates and
-asserts the resolved operation index is stable across an export round-trip.
-
----
-
-## 6. The agent layer
-
-### 6.1 Model configuration
-
-| Setting | Value | Why |
-|---|---|---|
-| Model | `claude-opus-5` | Spatial reasoning + multi-step tool use is the hard part of this product. |
-| Thinking | `{"type": "adaptive"}` | Default on Opus 5. **`max_tokens` caps thinking + text together** — size it generously. |
-| `max_tokens` | `32000`, streaming | Must stream above ~16K or the SDK hits HTTP timeouts. |
-| `output_config.effort` | `"high"` to start | Sweep `medium` / `high` / `xhigh` on a real eval set; `low`/`medium` are unusually strong on Opus 5 and are the main cost lever. |
-| `thinking.display` | `"summarized"` | We show a "thinking…" trace in the chat pane; the default `"omitted"` returns empty text and reads as a dead pause. |
-| `task_budget` | per-request, ≥20 000 | Bounds cumulative spend across the loop and lets the model pace itself instead of being cut off. See §11. |
-| `fallbacks` | `"default"` | Cheap insurance. Unlikely to fire for Minecraft builds, but a classifier refusal returns HTTP 200 with `stop_reason: "refusal"` and empty `content` — code that reads `content[0]` would crash. |
-
-```python
-# agent/loop.py — shape only
-runner = client.beta.messages.tool_runner(
-    model="claude-opus-5",
-    max_tokens=32_000,
-    betas=["task-budgets-2026-03-13"],
-    system=[{"type": "text", "text": SYSTEM_PROMPT,
-             "cache_control": {"type": "ephemeral"}}],
-    output_config={"effort": "high",
-                   "task_budget": {"type": "tokens", "total": budget}},
-    thinking={"type": "adaptive", "display": "summarized"},
-    tools=STRUCTURE_TOOLS,
-    messages=history,
-    stream=True,
-)
-```
-
-**Use the SDK Tool Runner, not a hand-written loop.** It drives request → execute → repeat
-for us, supports streaming, and its per-turn hooks cover everything we need (inspecting
-results before they return, adding `cache_control`, bounding iterations). The `pause_turn`
-caveat that complicates the Python runner applies to *server-side* tools; we have only
-custom tools, so it cannot occur here.
-
-### 6.2 Tool surface — six tools, and no filesystem
-
-The tool surface is the product's real API. Design it so the model can do surgical edits,
-not just full rewrites.
-
-| Tool | Purpose | Notes |
-|---|---|---|
-| `put_structure` | Replace the whole structure (`name`, `description`, `operations`, `blocks`) | Used for the first build and for wholesale redesigns. |
-| `patch_operations` | Ordered list of `{index, action: replace\|insert\|delete, operation}` | **The feedback workhorse.** Lets "make the roof steeper" cost one op edit instead of re-emitting 200. |
-| `get_structure` | Read current state + per-op block counts | Cheap re-grounding after a gap. |
-| `get_annotations` | Pull open user markup, each already resolved to an operation index | The feedback channel (§8). |
-| `resolve_annotations` | Close annotations with a note on what changed | Drives the UI's "addressed" state. |
-| `export_structure` | Compile to requested formats + version | Returns signed download URLs. |
-
-Every tool is declared `strict: true` with `additionalProperties: false` and explicit
-`required`. Notes:
-
-- **Schema constraint gap.** Strict tool use rejects numerical constraints (`minimum`,
-  `maximum`) and array-length constraints. Our schema has both — `radius: ge=0`, and
-  `Vec3 = Annotated[List[int], Field(min_length=3, max_length=3)]`. The Python SDK strips
-  these from the schema it sends and validates client-side, so the model is *not* prevented
-  from emitting a 2-element vector. Every tool therefore validates through Pydantic and, on
-  failure, returns `tool_result` with `is_error: true` and the Pydantic message verbatim so
-  the model self-corrects. Do not let a `ValidationError` escape the tool function.
-- **Block validation is a tool result, not a hard failure.** Reuse `validate_block_ids()`;
-  return unknown blocks with fuzzy suggestions in the result so the model can fix its own
-  typos mid-loop. This is already the MCP server's behaviour — keep it.
-- **Do not expose a file-write tool.** Persistence is our concern, not the model's.
-- Tool descriptions should be *prescriptive about when to call*, e.g. "Call
-  `patch_operations` rather than `put_structure` whenever fewer than half the operations
-  change." Opus 5 responds well to trigger conditions in descriptions.
-
-### 6.3 Prompt caching
-
-Render order is `tools` → `system` → `messages`, and caching is a **prefix match** — one
-changed byte invalidates everything after it.
-
-- **Stable prefix:** the 6 tool schemas (fixed, deterministically ordered) + the system
-  prompt (build guidance, operation reference, block palette advice). One `cache_control`
-  breakpoint on the last system block covers both. Comfortably over Opus 5's 512-token
-  minimum.
-- **Volatile content goes in `messages`, after the breakpoint:** current structure state,
-  annotations, user text.
-- **Second breakpoint** on the last content block of the newest turn, so long revision
-  sessions accrue cache hits incrementally.
-
-Three traps to avoid, all of which silently destroy the cache:
-
-1. **Never interpolate the structure JSON into the system prompt.** It changes every turn
-   and sits ahead of everything. It belongs in a tool result.
-2. **Never interpolate a timestamp, user ID, or session ID into the system prompt.** Same
-   reason, and it also prevents any cross-user sharing of the prefix.
-3. **Keep the tool list identical for every user and every request.** Tools render at
-   position 0; a per-user tool set means nothing ever caches.
-
-Verify in staging by asserting `usage.cache_read_input_tokens > 0` on the second request of
-a session. If it is zero, one of the three above is happening.
-
-### 6.4 Streaming to the browser
-
-One SSE stream per chat turn. Typed envelope so the frontend can drive both panes from one
-connection:
-
-```ts
-type AgentEvent =
-  | { t: "thinking";  text: string }              // summarized reasoning delta
-  | { t: "text";      text: string }              // assistant message delta
-  | { t: "tool_call"; name: string; label: string }
-  | { t: "structure"; version: number; structure: Structure }  // -> re-render 3D
-  | { t: "warning";   blocks: Record<string, string[]> }       // unknown block ids
-  | { t: "usage";     input: number; output: number; cost_cents: number }
-  | { t: "done";      stop_reason: string }
-  | { t: "error";     message: string }
-```
-
-`structure` events are emitted by the `put_structure` / `patch_operations` tool functions
-pushing onto an `asyncio.Queue` that the SSE handler drains. The viewport updates *during*
-the model's turn, not after it — which is most of the "watch it get built" feel.
+viewer must render in authoring coordinates**, or an annotation on a block maps to the wrong
+operation. Authoring coords are canonical everywhere; the min-corner offset is computed only
+inside export and never leaves it. Add a regression test that annotates a build with negative
+coordinates and asserts the resolved operation index survives an export round-trip.
 
 ---
 
 ## 7. The 3D viewer
 
-### 7.1 Renderer
+**One `InstancedMesh` per distinct block type**, instance matrices from the `expand()` block
+map, interior faces culled (emit a voxel only if one of its 6 neighbours is absent). Handles
+the sizes this tool produces comfortably. Add instance-ID raycast picking — required for
+annotation.
 
-**Build it directly on three.js: one `InstancedMesh` per distinct block type**, instance
-matrices from the `expand()` block map, with interior faces culled (only emit a voxel if at
-least one of its 6 neighbours is absent). This handles the sizes this tool produces
-(thousands to low tens of thousands of voxels) comfortably and keeps us free of a
-thin-maintenance dependency.
+| Alternative | Verdict |
+|---|---|
+| [`deepslate`](https://misode.github.io/deepslate/) | Real block models, mature — but *we* supply models + texture atlas. |
+| [`lodestone`](https://github.com/mattzh72/lodestone) | On-target, ships a default pack, `ThreeStructureRenderer` — but 21 stars / 34 commits. Too thin for the critical path. Revisit later. |
 
-Evaluated alternatives:
-
-| Option | Fidelity | Verdict |
-|---|---|---|
-| Own `InstancedMesh` renderer | Flat-shaded blocky preview, correct silhouette | **Chosen.** No asset problem, full control, small. |
-| [`deepslate`](https://misode.github.io/deepslate/) | Real Minecraft block models | Mature, but *we* must supply models + texture atlas — which is the licensing problem below. |
-| [`lodestone`](https://github.com/mattzh72/lodestone) | Real models, ships a default pack, `ThreeStructureRenderer` | On-target but 21 stars / 34 commits. Too thin a dependency for a hosted product's critical path. Revisit later. |
-
-Add instance-ID picking (`raycaster` against the instanced meshes) — required for
-annotation (§8).
-
-### 7.2 Textures: a hard constraint for a hosted product
-
-**Vanilla Minecraft textures are Mojang's and cannot be redistributed from our servers.**
-This was a non-issue for a local tool and is a real one now. Three viable paths:
-
-1. **Flat per-block colours (default, ship this).** Add `src/minecraft_builder/colors.py`
-   mapping block ID → RGB, generated from PrismarineJS minecraft-data — the *same source*
-   as the vendored `data/blocks_*.txt`, so `data/README.md`'s regeneration script extends
-   naturally to it. Fall back to a hand-tuned table for blocks without usable colour data.
-   Zero legal exposure, and for judging "this roof is wrong" silhouette + colour is ~90% of
-   the value.
-2. **User-supplied resource pack (opt-in, phase 3).** The user picks their own
-   `.minecraft/versions/<v>/<v>.jar`; we unzip and build the atlas **entirely in the
-   browser** and cache it in IndexedDB. The assets never reach our server, so we are not
-   storing or distributing them. This is the clean way to offer real textures.
-3. Openly-licensed resource pack — viable, but looks like neither vanilla nor our own
-   thing. Not recommended.
-
-Ship 1, add 2 behind a toggle. Never ship a vanilla atlas from our origin.
+**Textures.** Stage 1 is local, so a user pointing the tool at their own
+`.minecraft/versions/<v>/<v>.jar` is entirely legitimate — nothing is redistributed. Still
+ship **flat per-block colours** as the default (`colors.py`, generated from PrismarineJS
+minecraft-data — the same source as `data/blocks_*.txt`, so `data/README.md`'s regeneration
+script extends naturally). Silhouette plus colour is ~90% of what's needed to judge a build,
+and it keeps Stage 2 unblocked, where serving a vanilla atlas from our origin would **not**
+be legal. Real textures are an opt-in extra, read from the local jar, never bundled.
 
 ---
 
 ## 8. Annotation and the feedback loop
 
-### 8.1 Annotation schema
-
 ```python
 class Annotation(BaseModel):
     id: UUID
-    structure_version: int          # which version was on screen when marked
+    structure_version: int          # what was on screen when marked
     kind: Literal["point", "region", "operation", "global"]
-    pos: Optional[Vec3]             # kind="point"
-    start: Optional[Vec3]           # kind="region"
+    pos: Optional[Vec3]             # point
+    start: Optional[Vec3]           # region
     end: Optional[Vec3]
     op_index: Optional[int]         # resolved server-side via provenance
-    op_summary: Optional[str]       # e.g. 'pyramid centre=[8,5,8] base=6 block=oak_planks'
+    op_summary: Optional[str]       # 'pyramid centre=[8,5,8] base=6 block=oak_planks'
     note: str
     status: Literal["open", "resolved"] = "open"
 ```
 
-The server resolves `pos` / `start`+`end` → `op_index` + `op_summary` using
-`expand_with_provenance()` (§5.1) **at creation time**, against the version that was on
-screen. A region annotation resolves to the set of operations covering it, ranked by voxel
-count, keeping the dominant one.
+The server resolves coordinates → `op_index` + `op_summary` **at creation time**, against the
+version on screen, using `expand_with_provenance()`. A region resolves to the operations
+covering it, ranked by voxel count, keeping the dominant one; the tray lets the user override
+the target. `get_annotations` therefore hands Claude something directly actionable.
 
-`get_annotations` therefore hands the model something directly actionable:
+**Flow:** click a face (point) or shift-drag corners (region) → note popover → marker pinned
+in 3D and listed in the tray → batch up several → **Apply notes** posts a canned prompt →
+Claude calls `get_annotations` → `patch_operations` → `show_structure` → `reply`.
 
-```json
-{"id": "…", "kind": "region", "op_index": 4,
- "op_summary": "pyramid centre=[8,5,8] base=6 axis=y block=oak_planks",
- "note": "roof is too steep and the wrong material"}
-```
+Batching is not a compromise: events arriving mid-turn are grouped anyway, and users
+accumulate several objections before wanting a revision. Don't build a polling mechanism to
+fake interruption.
 
-### 8.2 Interaction
-
-1. User clicks a block face (point) or shift-drags two corners (region) in the viewport.
-2. A note popover opens; the annotation is created and pinned as a marker in 3D. The tray
-   lists all open annotations with the operation each resolved to.
-3. User batches up several complaints, then sends "apply my notes" — or presses **Apply
-   notes**, which posts a canned message.
-4. The agent calls `get_annotations` → `patch_operations` → `resolve_annotations`. Each
-   marker flips to "addressed" with the model's note on what it changed.
-
-**Why a button and not automatic:** the agent loop is driven by a request; the browser
-cannot interrupt a turn in progress. Batching is also better UX — users accumulate several
-objections before wanting a revision. Do not build a polling mechanism to fake
-interruption.
-
-Every accepted revision writes a new immutable `structure_version` row, so the user can
-diff and roll back. This matters — "actually the old roof was better" is the single most
-predictable request in this product.
+Every accepted revision appends an immutable version so the user can roll back — "actually
+the old roof was better" is the most predictable request in this product. Stage 1 keeps
+versions in memory plus a JSON file; no database.
 
 ---
 
 ## 9. Export and the Minecraft side
 
-### 9.1 What works today
+Today: `.schem` (Sponge v2) only — a **WorldEdit** format (`//schem load` + `//paste`),
+instant paste, needs creative/op.
 
-`.schem` (Sponge v2) only, which is a **WorldEdit** format: `//schem load x` + `//paste`.
-Instant paste, requires creative/op.
-
-### 9.2 Add `.litematic` — the blueprint-mod path
-
-**Litematica** is the mod users mean by "blueprint": it renders a translucent hologram in
-the world that you build by hand in survival, with a material list and progress overlay.
-Its native format is `.litematic`. It can load `.schem` on 1.17+, but the author describes
-that as a "quick hax" and 1.13–1.16 cannot load Sponge schematics at all
-([discussion](https://github.com/maruohon/litematica/discussions/332)). Native output
-removes the question.
-
-[`litemapy`](https://pypi.org/project/litemapy/) writes `.litematic` from Python (0.11.0b0,
-June 2025). Its input shape — set blocks by coordinate — is exactly what `expand()`
-returns:
+**Add `.litematic`.** Litematica is the mod people mean by "blueprint": a translucent
+hologram you build by hand in survival, with a material list. Its native format is
+`.litematic`; its `.schem` support is explicitly a hack by the author and absent on 1.13–1.16
+([discussion](https://github.com/maruohon/litematica/discussions/332)).
+[`litemapy`](https://pypi.org/project/litemapy/) (0.11.0b0, June 2025) writes it, and its
+input shape is what `expand()` already returns:
 
 ```python
-# converter.py
 def to_litematic(structure, output_path, version=DEFAULT_VERSION) -> str:
     from litemapy import Region, BlockState
     block_map = structure.expand()
@@ -447,146 +400,111 @@ def to_litematic(structure, output_path, version=DEFAULT_VERSION) -> str:
     ...
 ```
 
-Pin `litemapy` with an explicit upper bound — it is a beta release, and a `.litematic`
-writer regression would be silent (the file loads, the build is wrong). Add a round-trip
-test that reads back what it wrote and compares against `expand()`.
+Pin `litemapy` with an upper bound — it is beta, and a writer regression would be silent (the
+file loads, the build is wrong). Add a round-trip test comparing readback against `expand()`.
 
-`export_structure` returns one signed URL per requested format, plus copy-paste import
-instructions per format:
-
-| Format | Mod | In-game |
-|---|---|---|
-| `.litematic` | Litematica | drop in `.minecraft/schematics/`, load as a placement, build against the hologram |
-| `.schem` | WorldEdit 7.x | `//schem load <name>` then `//paste` |
-
-Also emit a **material list** (block counts from `expand()`) in the export response — it
-costs nothing, Litematica users need it, and it makes the export screen feel finished.
+Because Stage 1 is local, `paths.py` can write **straight into
+`.minecraft/schematics/`** — "copy into the game" becomes zero steps. Emit a material list
+(block counts from `expand()`) with every export; it costs nothing and Litematica users need
+it.
 
 ---
 
-## 10. Persistence, auth, multi-tenancy
+## 10. Security (Stage 1)
 
-- **Postgres.** `users`, `structures`, `structure_versions` (JSONB, immutable, append-only),
-  `annotations`, `messages`, `usage_events`.
-- **Structures as JSONB**, not schematics. Schematics are regenerable artifacts; store them
-  in object storage with a short TTL and regenerate on demand.
-- **Auth:** OAuth (Google/GitHub) or magic link. Do not roll password auth.
-- **Conversation history** persisted per structure so a session can be resumed — with the
-  caveat that a resumed session starts cold on cache.
-- **Object storage** for exports, 24h signed URLs, lifecycle-deleted.
-
----
-
-## 11. Cost model
-
-Opus 5 is **$5 / $25** per MTok (input / output). The illustrative numbers below assume a
-~5 000-token cached prefix, ~1 500 fresh input tokens per turn, and ~2 500 output tokens per
-turn (thinking + tool-call JSON + text), with multi-turn caching on.
-
-| Session | Model turns | Est. cost (Opus 5) | With `claude-sonnet-5` at intro pricing |
-|---|---:|---:|---:|
-| Simple one-shot build | 3 | ~$0.20 | ~$0.08 |
-| Typical build + 3 revision rounds | 12 | ~$1.00 | ~$0.40 |
-| Heavy session, large structure | 30 | ~$3.50 | ~$1.40 |
-
-**These are estimates, not measurements.** Before setting a price, run `count_tokens`
-against real transcripts — that is the only number worth pricing on.
-
-Levers, in order of effect:
-
-1. **Prompt caching** (§6.3) roughly halves input cost on multi-turn sessions. Non-optional.
-2. **`effort`** — sweep it per route. `low`/`medium` are strong on Opus 5 and this is the
-   biggest quality/cost dial. Note that effort will *not* reliably shorten the model's
-   user-facing text; use a conciseness instruction for that.
-3. **`task_budget`** per request (min 20 000). This is the mechanism for "a free build gets
-   N tokens" — the model paces itself and finishes gracefully instead of being truncated
-   mid-structure. Enforce a hard `max_tokens` ceiling on top of it.
-4. **Model tier** — `claude-sonnet-5` is $3/$15, with $2/$10 introductory pricing through
-   2026-08-31. A "fast/cheap" tier is a legitimate product decision; note that Sonnet 5
-   does not support mid-conversation system messages if you later depend on those.
-
-Operationally: meter output tokens per user, expose remaining budget in the UI, hard-stop at
-the cap. Emit a `usage` SSE event per turn so cost is visible while it accrues — the fastest
-way to lose money here is an unmetered agentic loop.
+- Bind HTTP to `127.0.0.1` explicitly, never `0.0.0.0`. An open channel endpoint is a prompt
+  injection vector into a session that can run `Bash` on the user's machine.
+- Single local user, so no sender allowlist is needed — but that assumption *is* the security
+  model, so don't add a remote-reachable transport without revisiting it.
+- Voxel and operation caps enforced inside the tools (§4.2), so a runaway build can't OOM the
+  session.
+- `expand()` is CPU-bound; run large expansions and exports in a thread with a timeout so the
+  stdio loop stays responsive.
+- Do not declare `claude/channel/permission` (permission relay). It would let anything that
+  can POST to localhost approve tool use in the session. No benefit for a local UI.
 
 ---
 
-## 12. Security
+## 11. Stage 2: what changes when it's hosted
 
-- **Structure JSON is untrusted input** — from the model *and* from users. Validate through
-  Pydantic at every boundary. Cap total voxel count (suggest 2 000 000) *before* calling
-  `expand()`: a `cuboid` from `[-100000,…]` to `[100000,…]` is a trivial OOM. Cap operation
-  count and per-op radius/height too, and enforce the cap inside the tool so the model gets
-  an error result it can recover from.
-- **`expand()` is CPU-bound.** Run exports and large expansions in a worker/thread pool with
-  a timeout, not on the request path.
-- **Never put the API key anywhere a client can reach it.** All Anthropic calls are
-  server-side. No key in the browser bundle, no key proxied to the frontend.
-- **Rate-limit `/api/chat` per user and per IP**, independently of the token budget.
-- Signed, expiring, non-enumerable export URLs.
-- Prompt-injection surface is small (no browsing, no code execution, no filesystem), but
-  keep it that way: do not add a tool that fetches URLs on the model's behalf without
-  revisiting this section.
+Recorded so Stage 1 doesn't foreclose it. Everything in §5–§9 carries over unchanged; what
+gets *added* is the agent layer Stage 1 doesn't need.
+
+- **Replace the channel with an agent loop.** FastAPI + `client.beta.messages.tool_runner`,
+  the same tools promoted to `strict: true` API tool definitions. Model `claude-opus-5`
+  ($5/$25 per MTok), adaptive thinking, `effort: "high"` to start then sweep, streaming with
+  `max_tokens` ≥ 32000 — note thinking and text share that budget on Opus 5.
+- **Prompt caching is mandatory**, roughly halving input cost on multi-turn sessions. One
+  breakpoint on the last system block covers tools + system; volatile content goes after it.
+  Three silent cache-killers to avoid: structure JSON in the system prompt, per-user tool
+  sets, timestamps in the prefix. Assert `cache_read_input_tokens > 0` in staging.
+- **Cost, illustrative** (~5K cached prefix, ~1.5K fresh input and ~2.5K output per turn):
+  one-shot build ~$0.20, build + 3 revisions ~$1.00, heavy session ~$3.50. **Estimates —
+  price on `count_tokens` against real transcripts.** `task_budget` (min 20 000) is the
+  per-user quota mechanism; meter output tokens and hard-stop at the cap.
+- **Textures become a hard constraint.** Vanilla assets cannot be served from our origin.
+  Flat colours by default; user-supplied jar unpacked **in the browser** only.
+- Postgres (structures as JSONB, append-only versions), OAuth, object storage with signed
+  expiring URLs, per-user and per-IP rate limits. Never expose the API key to the client.
+
+The reason to build Stage 1 first is not just that it's cheaper: it validates the two things
+Stage 2 can't tell us in advance — whether flat-colour fidelity is enough to judge a build,
+and whether operation-level annotation actually produces good revisions.
 
 ---
 
-## 13. Risks
+## 12. Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Unmetered agentic loop burns API spend | **High** | `task_budget` + `max_tokens` + per-user cap + per-turn usage events. Build this in phase 1, not later. |
-| Flat colours aren't enough to judge a build | Medium | Validate with real users early; §7.2 path 2 is the escape hatch. |
-| `litemapy` beta regression corrupts blueprints silently | Medium | Pinned version + round-trip test + manual in-game check per release. |
-| Annotation→operation resolution feels wrong on overlapping ops | Medium | Rank by voxel count; let the user override the target op in the tray. |
-| Prompt cache silently not hitting, doubling cost | Medium | Assert `cache_read_input_tokens > 0` in staging; alert on cache-hit-rate drop. |
-| Coordinate-space mix-up (§5.2) mismaps annotations | Medium | Authoring coords canonical; regression test with negative coordinates. |
-| Effort/verbosity defaults inflate cost | Low | Effort sweep on a real eval set before launch. |
+| Channels are a research preview; contract may change | **High** | Isolate all channel code in `channel.py`. Pin `mcp`. Test asserting the wire frame. The MCP tools keep working without the channel, so a break degrades rather than bricks. |
+| Custom channels need `--dangerously-load-development-channels` indefinitely | Medium | Accept it for a personal tool. Document the flag prominently. Don't plan around allowlisting. |
+| Silent event drop when the flag is missing | Medium | §4.3 liveness UX — this will otherwise eat hours. |
+| Flat colours aren't enough to judge a build | Medium | Phase 1 exists to answer this before more is built. Local jar extraction is the escape hatch. |
+| Python SDK tightens `SendNotificationT` typing | Low | Pinned `mcp` + serialization test. |
+| `litemapy` beta regression corrupts blueprints silently | Medium | Pin, round-trip test, manual in-game check per release. |
+| Runaway `expand()` OOMs the user's Claude Code session | Medium | Caps enforced in-tool before expansion. |
 
 ---
 
-## 14. Milestones
+## 13. Milestones
 
-**Phase 0 — core changes (small, independently useful, ship first)**
-- `expand_with_provenance()` + tests
-- `to_litematic()` + `output_formats` on the MCP tool + round-trip test
-- `colors.py` + generation script appended to `data/README.md`
-- Voxel-count/op-count caps in the core
+**Phase 0 — core, no UI.** `expand_with_provenance()` + tests · `to_litematic()` +
+`output_formats` on the existing tool + round-trip test · `colors.py` + generation script ·
+voxel/op caps. *Every item improves the current MCP server on its own and carries no channel
+risk. Land this regardless of what happens to the rest of the plan.*
 
-*Everything in phase 0 improves the existing MCP server on its own and carries no web-app
-risk. It is the right first commit regardless of what happens to the rest of this plan.*
+**Phase 1 — viewer, no channel.** `web/app.py` serving the UI, three.js `InstancedMesh`
+renderer, orbit/pan/zoom, flat colours, fed by a `show_structure` MCP tool called the ordinary
+way. Already useful: ask Claude Code to build something and watch it appear. Answers the
+fidelity question before anything harder.
 
-**Phase 1 — read-only web viewer**
-FastAPI skeleton, `POST /api/structures` + `GET`, three.js `InstancedMesh` renderer with
-orbit/pan/zoom, flat colours, no agent. Validates the single riskiest assumption — *is this
-fidelity good enough to judge a build?* — before any Claude integration.
+**Phase 2 — the channel.** Capability declaration, `channel.py`, `POST /prompt`, `GET /events`
+SSE, chat pane, `reply` tool, `instructions` tuning, liveness UX. **This is the milestone the
+request describes:** type in the browser, talk to the session.
 
-**Phase 2 — agent + streaming**
-Tool-use loop, 6 tools, SSE, chat pane, live structure updates, prompt caching, usage
-metering and budget caps. First end-to-end "describe it and watch it appear".
+**Phase 3 — annotation loop.** Picking, point/region markup, tray, `get_annotations`,
+`patch_operations`, version history and rollback. The differentiating feature.
 
-**Phase 3 — annotation loop**
-Picking, point/region markup, annotation tray, `get_annotations` / `resolve_annotations`,
-version history and rollback. This is the differentiating feature.
+**Phase 4 — export polish.** Direct write to `.minecraft/schematics/`, material list, format
+picker, import instructions per format.
 
-**Phase 4 — product**
-Auth, Postgres, export screen with material list, per-user budgets, optional
-user-supplied-resource-pack textures.
-
-Phases 1–3 are the product; phase 4 makes it hostable. Phase 0 should land now.
+**Stage 2 (later).** §11.
 
 ---
 
-## Appendix: decisions and their rationale
+## Appendix: decisions and rationale
 
 | Decision | Rationale |
 |---|---|
-| Python backend | `schema.py` is the tool schema; a TS rewrite guarantees drift between two geometry definitions. |
-| Operations JSON as source of truth | Schematics are compiled output. Editing the JSON is what makes revision cheap and diffable. |
-| Own three.js renderer over `lodestone`/`deepslate` | No asset licensing problem, no thin dependency in the critical path. Revisit `deepslate` if real block models become a requirement. |
-| Six tools, no filesystem tool | Narrow, typed, auditable surface; persistence is the server's job. |
-| `patch_operations` alongside `put_structure` | Surgical edits are what makes "make the roof steeper" cheap instead of a 200-op rewrite. |
-| Operation provenance for annotations | Turns vague dissatisfaction into a targeted edit of one operation — the thing LLMs are good at. |
-| Batched "apply notes" instead of live interruption | MCP-style and API-style loops are both request-driven; the browser cannot interrupt a turn. Batching is also better UX. |
-| Flat colours by default | The only texture option that is unambiguously safe to serve from our origin. |
-| Native `.litematic` | Litematica's `.schem` support is explicitly a hack and absent on 1.13–1.16. |
-| MCP server retained | Two clients, one core. Free surface, and it keeps the core framework-independent. |
+| Stage 1 local via channels, hosting later | Deletes the entire agent layer, API cost, auth, and texture-licensing problem. Validates the two open product questions first. |
+| One Python process, not Bun + Python | Verified the Python SDK can declare the capability and emit the notification. Avoids splitting state across processes and duplicating the geometry model. |
+| Channel code isolated in `channel.py` | It's the only research-preview surface. Everything else must survive a contract change. |
+| Keep the existing MCP tools working | A channel break degrades to the current product instead of bricking it. |
+| Operations JSON as source of truth | Schematics are compiled output; editing JSON is what makes revision cheap and diffable. |
+| Own three.js renderer | No asset-licensing problem, no thin dependency in the critical path. |
+| Operation provenance for annotations | Turns vague dissatisfaction into a targeted single-operation edit. |
+| `patch_operations` alongside `show_structure` | "Make the roof steeper" costs one op edit, not a 200-op rewrite. |
+| Batched "Apply notes" | Mid-turn events are grouped by Claude Code anyway, and users batch objections naturally. |
+| Flat colours default even locally | Keeps Stage 2 legal and Phase 1 cheap; local jar extraction is an opt-in extra. |
+| No permission relay | Anything that can POST to localhost would be able to approve tool use in the session. |
