@@ -1,5 +1,7 @@
 # Minecraft Builder MCP Server
 
+[![CI](https://github.com/JesperMorais/minecraft-builder-claude-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/JesperMorais/minecraft-builder-claude-mcp-server/actions/workflows/ci.yml)
+
 An MCP (Model Context Protocol) server that enables Claude to generate Minecraft structures from natural language descriptions. Describe what you want to build, and Claude will create a `.schem` file that you can import into Minecraft.
 
 ## Features
