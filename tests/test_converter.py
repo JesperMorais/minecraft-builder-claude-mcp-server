@@ -1,50 +1,45 @@
-"""Simple test script for the Minecraft structure converter."""
+"""Tests for JSON -> .schem conversion."""
 
-import sys
-sys.path.insert(0, 'src')
+from mcschematic import MCSchematic
 
-from minecraft_builder.schema import MinecraftStructure, BlockData
+from minecraft_builder.schema import MinecraftStructure
 from minecraft_builder.converter import SchematicConverter
 
-# Create a simple 3x3 stone platform
-structure = MinecraftStructure(
-    name="test_platform",
-    description="A simple 3x3 stone platform for testing",
-    blocks=[
-        BlockData(x=0, y=0, z=0, block_type="stone"),
-        BlockData(x=1, y=0, z=0, block_type="stone"),
-        BlockData(x=2, y=0, z=0, block_type="stone"),
-        BlockData(x=0, y=0, z=1, block_type="stone"),
-        BlockData(x=1, y=0, z=1, block_type="stone"),
-        BlockData(x=2, y=0, z=1, block_type="stone"),
-        BlockData(x=0, y=0, z=2, block_type="stone"),
-        BlockData(x=1, y=0, z=2, block_type="stone"),
-        BlockData(x=2, y=0, z=2, block_type="stone"),
-    ]
-)
 
-print("Testing Minecraft Structure Converter...")
-print(f"Structure: {structure.name}")
-print(f"Blocks: {len(structure.blocks)}")
+def test_normalize_block_id():
+    n = SchematicConverter.normalize_block_id
+    assert n("stone") == "minecraft:stone"
+    assert n("minecraft:stone") == "minecraft:stone"
+    assert n("oak_log[axis=y]") == "minecraft:oak_log[axis=y]"
+    assert n("minecraft:oak_log[axis=y]") == "minecraft:oak_log[axis=y]"
 
-# Convert to schematic
-try:
-    output_path = SchematicConverter.to_schematic(structure, "minecraft_structures/test_platform.schem")
-    print(f"[OK] Successfully created schematic: {output_path}")
 
-    # Check file exists
-    import os
-    if os.path.exists(output_path):
-        file_size = os.path.getsize(output_path)
-        print(f"[OK] File exists: {file_size} bytes")
-    else:
-        print("[FAIL] File was not created!")
-        sys.exit(1)
+def test_creates_schem_file(tmp_path):
+    structure = MinecraftStructure(
+        name="platform",
+        operations=[{"op": "cuboid", "start": [0, 0, 0], "end": [2, 0, 2], "block": "stone"}],
+    )
+    out = tmp_path / "platform.schem"
+    path = SchematicConverter.to_schematic(structure, str(out))
+    assert out.exists()
+    assert out.stat().st_size > 0
+    assert path.endswith("platform.schem")
 
-    print("\n[OK] All tests passed!")
 
-except Exception as e:
-    print(f"[FAIL] Error: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
+def test_negative_coordinates_are_preserved(tmp_path):
+    # Regression: blocks at negative coords used to be silently dropped.
+    structure = MinecraftStructure(
+        name="neg",
+        blocks=[
+            {"x": -3, "y": -1, "z": -2, "block_type": "stone"},
+            {"x": 0, "y": 0, "z": 0, "block_type": "dirt"},
+        ],
+    )
+    out = tmp_path / "neg.schem"
+    SchematicConverter.to_schematic(structure, str(out))
+
+    # Load it back and confirm both blocks survived, offset to the origin.
+    loaded = MCSchematic(schematicToLoadPath_or_mcStructure=str(out))
+    # Minimum corner was (-3, -1, -2) so it should map to (0, 0, 0).
+    assert "minecraft:stone" in loaded.getBlockDataAt((0, 0, 0))
+    assert "minecraft:dirt" in loaded.getBlockDataAt((3, 1, 2))

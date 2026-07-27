@@ -33,3 +33,5 @@ nul
 
 # AI assistant instructions
 CLAUDE.md
+
+.venv/

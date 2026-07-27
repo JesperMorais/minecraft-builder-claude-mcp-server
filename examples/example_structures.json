@@ -62,6 +62,38 @@
         {"x": 0, "y": 4, "z": 1, "block_type": "cobblestone"},
         {"x": 1, "y": 4, "z": 1, "block_type": "cobblestone"}
       ]
+    },
+    {
+      "name": "small_tower_as_operation",
+      "description": "The same 2x2x5 tower as one operation instead of 20 blocks",
+      "operations": [
+        {"op": "cuboid", "start": [0, 0, 0], "end": [1, 4, 1], "block": "cobblestone"}
+      ]
+    },
+    {
+      "name": "stone_hut",
+      "description": "Hollow stone hut, open roof, with a carved doorway",
+      "operations": [
+        {"op": "hollow_box", "start": [0, 0, 0], "end": [6, 4, 6], "block": "stone", "ceiling": false},
+        {"op": "cuboid", "start": [3, 1, 0], "end": [3, 3, 0], "block": "air"},
+        {"op": "block", "pos": [3, 5, 3], "block": "glowstone"}
+      ]
+    },
+    {
+      "name": "glass_observatory",
+      "description": "A hollow glass dome on a stone cylinder base",
+      "operations": [
+        {"op": "cylinder", "center": [0, 0, 0], "radius": 6, "height": 6, "axis": "y", "block": "stone_bricks", "hollow": true},
+        {"op": "sphere", "center": [0, 6, 0], "radius": 6, "block": "glass", "hollow": true},
+        {"op": "cuboid", "start": [-5, 0, -5], "end": [5, 0, 5], "block": "polished_andesite"}
+      ]
+    },
+    {
+      "name": "pyramid",
+      "description": "A solid sandstone step pyramid, 13x13 base",
+      "operations": [
+        {"op": "pyramid", "center": [0, 0, 0], "base": 6, "axis": "y", "block": "sandstone"}
+      ]
     }
   ]
 }

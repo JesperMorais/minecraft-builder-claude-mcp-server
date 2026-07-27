@@ -30,33 +30,46 @@ async def list_tools() -> list[Tool]:
             icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3QgZmlsbD0iIzU0MzIxYiIgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIi8+PHJlY3QgZmlsbD0iIzZkNDIyZSIgeD0iMCIgeT0iMCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ii8+PHJlY3QgZmlsbD0iIzZkNDIyZSIgeD0iMTYiIHk9IjE2IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiLz48L3N2Zz4=", mimeType="image/svg+xml")],
             description="""Creates a Minecraft structure file (.schem) from a JSON structure definition.
 
-The JSON should define a 3D structure using blocks with coordinates. Each block has:
-- x, y, z: Integer coordinates (relative to origin, starting from 0)
-- block_type: Minecraft block ID (e.g., "stone", "oak_planks", "minecraft:glass")
+PREFER SHAPE OPERATIONS over listing blocks one by one. Describing a wall as a
+single "cuboid" operation instead of hundreds of block entries is far more
+compact and avoids truncation on large builds. Use raw "blocks" only for
+scattered details a shape can't express.
 
-Example structure:
+A structure has: name, optional description, and any mix of "operations" and
+"blocks". Operations and blocks apply IN ORDER, and later placements overwrite
+earlier ones at the same coordinate — so you can fill a solid wall, then carve
+a window out of it by placing "air" over part of it.
+
+Coordinates are [x, y, z] integer lists. X=width, Y=height (up), Z=length.
+They may be negative; the tool re-centres the structure automatically.
+
+OPERATIONS (each needs an "op" and a "block"):
+- cuboid:     solid box.  {"op":"cuboid","start":[x,y,z],"end":[x,y,z],"block":"stone"}
+- hollow_box: box shell.  {"op":"hollow_box","start":[..],"end":[..],"block":"oak_planks","walls":true,"floor":true,"ceiling":false}
+- sphere:     {"op":"sphere","center":[x,y,z],"radius":5,"block":"glass","hollow":true}
+- cylinder:   {"op":"cylinder","center":[x,y,z],"radius":3,"height":10,"axis":"y","block":"stone","hollow":false}
+- line:       {"op":"line","start":[..],"end":[..],"block":"glowstone"}
+- pyramid:    {"op":"pyramid","center":[x,y,z],"base":6,"axis":"y","block":"sandstone","hollow":false}
+- block:      single block.  {"op":"block","pos":[x,y,z],"block":"torch"}
+- replace:    swap blocks in a region.  {"op":"replace","start":[..],"end":[..],"from_block":"stone","to_block":"air"}
+
+Block IDs may include states, e.g. "oak_log[axis=y]", "oak_stairs[facing=north]".
+The "minecraft:" namespace is added automatically if omitted.
+
+Example — a hollow stone hut with a doorway:
 {
-  "name": "simple_tower",
-  "description": "A small stone tower",
-  "blocks": [
-    {"x": 0, "y": 0, "z": 0, "block_type": "stone"},
-    {"x": 1, "y": 0, "z": 0, "block_type": "stone"},
-    {"x": 0, "y": 1, "z": 0, "block_type": "stone"},
-    {"x": 1, "y": 1, "z": 0, "block_type": "stone"}
+  "name": "stone_hut",
+  "operations": [
+    {"op": "hollow_box", "start": [0,0,0], "end": [6,4,6], "block": "stone", "ceiling": false},
+    {"op": "cuboid", "start": [3,1,0], "end": [3,3,0], "block": "air"}
   ]
 }
 
-The structure will be saved as a .schem file that can be imported into Minecraft using WorldEdit or similar tools.
+INPUT METHODS:
+- Small/medium builds: provide the JSON directly in structure_json.
+- Very large builds: write the JSON to a file and pass json_file_path instead.
 
-IMPORTANT:
-- For small/medium structures (< 300 blocks): provide the JSON directly in structure_json
-- For large structures (300-800 blocks): try structure_json first, if it gets truncated, create the JSON file and use json_file_path
-- For very large structures (800+ blocks): the JSON might be too large for any method. Consider breaking into smaller pieces or simplifying.
-
-PATH REQUIREMENTS:
-- json_file_path must be a Windows path (e.g., C:\\Users\\josh\\Desktop\\file.json)
-- If you create files in your workspace, ask the user to download the JSON and tell you where they saved it
-- Before calling this tool, ask the user where they would like to save the .schem file.""",
+Before calling this tool, ask the user where they would like to save the .schem file.""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -175,6 +188,15 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             ]
 
         structure = MinecraftStructure(**structure_data)
+        block_map = structure.expand()
+
+        if not block_map:
+            return [
+                TextContent(
+                    type="text",
+                    text="❌ Error: Structure is empty - provide at least one block or operation."
+                )
+            ]
 
         # Get output directory from arguments and resolve shortcuts
         output_dir_str = arguments["output_directory"].strip().lower()
@@ -201,10 +223,10 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         # Convert to schematic
         result_path = SchematicConverter.to_schematic(structure, str(output_path))
 
-        # Calculate statistics
-        block_count = len(structure.blocks)
-        size = structure.size or structure.calculate_size()
-        unique_blocks = len(set(block.block_type for block in structure.blocks))
+        # Calculate statistics from the fully expanded block map
+        block_count = len(block_map)
+        size = structure.calculate_size()
+        unique_blocks = len(set(block_map.values()))
 
         # Get just the folder path
         folder_path = str(output_dir.absolute())

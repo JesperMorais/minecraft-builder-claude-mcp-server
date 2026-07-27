@@ -1,8 +1,19 @@
 # Building Large/Complex Structures
 
+## First: use shape operations
+
+Most "large structure" pain disappears if you describe the build with **shape
+operations** instead of listing every block. A solid 20×20×20 stone cube is one
+`cuboid` operation (~60 characters) rather than 8,000 block entries. See the
+"JSON Structure Format" section in the README for the full operation list.
+
+Reach for the file-based workflow below only when even the *operation* JSON is
+large — e.g. a build with thousands of individually-placed detail blocks that no
+primitive can express.
+
 ## The Problem
 
-When creating complex structures with many blocks, the JSON can become too large to fit in a single response, causing it to be truncated mid-generation.
+When creating complex structures with many explicit blocks, the JSON can become too large to fit in a single response, causing it to be truncated mid-generation.
 
 ## The Solution ✅
 

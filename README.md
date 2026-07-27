@@ -5,8 +5,11 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
 ## Features
 
 - Natural language to Minecraft structure conversion
+- **Shape primitives** (cuboid, hollow box, sphere, cylinder, line, pyramid) so
+  large builds are a handful of operations instead of thousands of blocks
 - MCP integration for Claude Desktop and Claude Code
 - WorldEdit-compatible `.schem` file generation
+- Support for block states (e.g. `oak_log[axis=y]`) and negative coordinates
 - Automatic folder opening in Windows Explorer
 - Support for structures from simple platforms to complex buildings
 - No API costs - works with your Claude subscription
@@ -98,6 +101,7 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 ### Tools Available
 
 **create_minecraft_structure** - Converts structure definitions to .schem files
+- Accepts shape `operations` (cuboid, sphere, cylinder, ...) and/or explicit `blocks`
 - Supports direct JSON input for small/medium structures
 - Supports file-based input for large structures (see LARGE_STRUCTURE_GUIDE.md)
 
@@ -122,25 +126,53 @@ Alternatively, use **MCEdit**, **Amulet Editor**, or other schematic tools.
 
 ## JSON Structure Format
 
-The tool accepts structures in this format:
+A structure is defined by a `name` plus any mix of **`operations`** (declarative
+shapes) and **`blocks`** (explicit per-voxel placements). Prefer operations —
+they are far more compact and never truncate on large builds.
+
+### Operations (recommended)
+
+Operations apply **in order**, and a later placement overwrites an earlier one
+at the same coordinate. This lets you fill a solid wall and then carve a window
+out of it with `air`:
+
+```json
+{
+  "name": "stone_hut",
+  "description": "Hollow stone hut with a doorway",
+  "operations": [
+    {"op": "hollow_box", "start": [0, 0, 0], "end": [6, 4, 6], "block": "stone", "ceiling": false},
+    {"op": "cuboid", "start": [3, 1, 0], "end": [3, 3, 0], "block": "air"}
+  ]
+}
+```
+
+Available operations (every op takes a `block`, except `replace`):
+
+| op | Shape | Key fields |
+|----|-------|-----------|
+| `cuboid` | Solid box | `start`, `end` |
+| `hollow_box` | Box shell | `start`, `end`, `walls`, `floor`, `ceiling` |
+| `sphere` | Sphere / shell | `center`, `radius`, `hollow` |
+| `cylinder` | Cylinder / tube | `center`, `radius`, `height`, `axis`, `hollow` |
+| `line` | 3D line | `start`, `end` |
+| `pyramid` | Step pyramid | `center`, `base`, `axis`, `hollow` |
+| `block` | Single block | `pos` |
+| `replace` | Swap blocks in a region | `start`, `end`, `from_block`, `to_block` |
+
+Coordinates are `[x, y, z]` integer lists and may be negative — the structure is
+re-centred automatically on export.
+
+### Explicit blocks
+
+Still supported for scattered detail a shape can't express:
 
 ```json
 {
   "name": "my_structure",
-  "description": "Optional description",
   "blocks": [
-    {
-      "x": 0,
-      "y": 0,
-      "z": 0,
-      "block_type": "minecraft:stone"
-    },
-    {
-      "x": 1,
-      "y": 0,
-      "z": 0,
-      "block_type": "oak_planks"
-    }
+    {"x": 0, "y": 0, "z": 0, "block_type": "minecraft:stone"},
+    {"x": 1, "y": 0, "z": 0, "block_type": "oak_planks"}
   ]
 }
 ```
@@ -148,11 +180,10 @@ The tool accepts structures in this format:
 **Block IDs:**
 - Full format: `minecraft:stone`, `minecraft:oak_planks`
 - Short format: `stone`, `oak_planks` (auto-prefixed with `minecraft:`)
+- With block state: `oak_log[axis=y]`, `oak_stairs[facing=north]`
 
 **Coordinates:**
-- Origin: (0, 0, 0)
 - X: Width, Y: Height, Z: Length
-- All coordinates relative to structure origin
 
 ## Compatibility
 
@@ -221,7 +252,8 @@ The server runs in stdio mode for MCP communication.
 ### Testing
 
 ```bash
-python test_converter.py
+pip install -e ".[dev]"
+pytest
 ```
 
 ## Dependencies
@@ -234,8 +266,9 @@ python test_converter.py
 
 Contributions welcome:
 - Additional output formats (.nbt, .litematic)
-- Block state and NBT data support
-- Enhanced structure validation
+- NBT data / block-entity support (chests, signs)
+- More shape primitives (torus, ellipsoid, arch, stairs)
+- Cross-platform folder opening (macOS/Linux)
 - More example structures
 
 ## License
