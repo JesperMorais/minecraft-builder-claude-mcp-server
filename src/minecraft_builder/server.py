@@ -26,6 +26,8 @@ from .versions import (
     supported_versions,
     validate_block_ids,
 )
+from .web import STATE as viewer_state
+from .web import ensure_running as start_viewer
 
 # Initialize MCP server
 app = Server("minecraft-builder")
@@ -271,6 +273,38 @@ json_file_path). Large footprints show stats only.""",
                     }
                 }
             }
+        ),
+        Tool(
+            name="show_structure",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzdmYjNmZiIgZD0iTTEyIDJsOSA1LjJ2OS42TDEyIDIyIDMgMTYuOFY3LjJMMTIgMnoiLz48cGF0aCBmaWxsPSIjNGE4MmQ2IiBkPSJNMTIgMTJsOS00Ljh2OS42TDEyIDIyeiIvPjwvc3ZnPg==", mimeType="image/svg+xml")],
+            description="""Displays a structure in a 3D viewer in the user's browser.
+
+Opens (or reuses) a local viewer at http://127.0.0.1:8791/ and renders the
+structure there, so the USER can see the build — this is for them, not for you.
+Use preview_structure when you need to check the geometry yourself.
+
+Show a build before writing a file whenever the user is likely to want a look
+first, and show it again after each revision: the page picks up new versions on
+its own, so the user watches the build change without reloading anything.
+
+Blocks are drawn as flat colours, not Minecraft textures. Shape, proportion and
+material choice come through; surface detail does not.
+
+Takes the same structure input as create_minecraft_structure (structure_json or
+json_file_path). Saves nothing to disk.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "structure_json": {
+                        "type": "string",
+                        "description": "JSON string defining the structure (same format as create_minecraft_structure)."
+                    },
+                    "json_file_path": {
+                        "type": "string",
+                        "description": "Path to a .json structure file (alternative to structure_json)."
+                    }
+                }
+            }
         )
     ]
 
@@ -291,6 +325,47 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         except Exception as e:
             _log(f"preview_structure failed: {traceback.format_exc()}")
             return [TextContent(type="text", text=f"❌ Error previewing structure: {type(e).__name__}: {str(e)}")]
+
+    if name == "show_structure":
+        try:
+            structure = _load_structure(arguments)
+            block_map = structure.expand()
+            if not block_map:
+                return [TextContent(
+                    type="text",
+                    text="❌ Error: Structure is empty - provide at least one block or operation."
+                )]
+            version = viewer_state.put(structure)
+            url = start_viewer()
+            size = structure.calculate_size()
+            return [TextContent(
+                type="text",
+                text=f"""✓ Showing **{structure.name}** in the 3D viewer (version {version}).
+
+🔗 {url}
+
+- Size: {size.width}x{size.height}x{size.length} blocks
+- Operations: {len(structure.blocks) + len(structure.operations)}
+
+The page updates on its own, so tell the user to open that link once and leave it
+open — later versions appear without a reload."""
+            )]
+        except StructureTooLargeError as e:
+            return [TextContent(type="text", text=f"❌ Error: structure too large - {str(e)}")]
+        except (json.JSONDecodeError, FileNotFoundError, ValidationError, ValueError) as e:
+            return [TextContent(type="text", text=f"❌ Error: could not show structure - {str(e)}")]
+        except OSError as e:
+            _log(f"show_structure failed to start viewer: {traceback.format_exc()}")
+            return [TextContent(
+                type="text",
+                text=f"❌ Error: could not start the viewer server - {str(e)}"
+            )]
+        except Exception as e:
+            _log(f"show_structure failed: {traceback.format_exc()}")
+            return [TextContent(
+                type="text",
+                text=f"❌ Error showing structure: {type(e).__name__}: {str(e)}"
+            )]
 
     # "open_folder_in_explorer" kept as a backwards-compatible alias.
     if name in ("open_output_folder", "open_folder_in_explorer"):

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Minecraft Builder — viewer</title>
+  <link rel="stylesheet" href="/style.css">
+  <!--
+    three.js from a CDN via an import map, so this page needs no build step.
+    To work offline, vendor the two files next to this one and point these
+    entries at them; nothing else changes.
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <header id="hud">
+    <h1 id="title">Waiting for a structure…</h1>
+    <p id="subtitle"></p>
+  </header>
+
+  <aside id="panel">
+    <div class="row">
+      <label><input type="checkbox" id="by-operation"> Colour by operation</label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="show-grid" checked> Ground grid</label>
+    </div>
+    <div id="legend"></div>
+  </aside>
+
+  <div id="status" role="status"></div>
+
+  <noscript>This viewer needs JavaScript.</noscript>
+  <script type="module" src="/viewer.js"></script>
+</body>
+</html>

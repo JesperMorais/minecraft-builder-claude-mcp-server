@@ -14,6 +14,8 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
   looking designed rather than merely valid — palettes, depth, proportion,
   roof pitch, lighting (see [Build quality](#build-quality))
 - MCP integration for Claude Desktop and Claude Code
+- **3D viewer in your browser** — see the build as it is generated, and watch it
+  change as you ask for revisions (see [3D viewer](#3d-viewer))
 - WorldEdit-compatible `.schem` and Litematica-native `.litematic` output, so a
   build can be pasted instantly *or* built by hand in survival against a
   hologram (see [Importing into Minecraft](#importing-into-minecraft))
@@ -118,6 +120,15 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
   (default `1.19.4`); see [Version support](#version-support)
 - Block IDs are validated against that version; unknown blocks are diagnosed as
   a typo, too-new, or renamed (set `strict: true` to fail instead of warn)
+
+**show_structure** - Renders a structure in a 3D viewer in your browser
+- Opens a local viewer at `http://127.0.0.1:8791/` (loopback only) and draws the
+  build there; saves nothing to disk
+- The page picks up new versions by itself, so leave the tab open and watch a
+  build change as you ask for revisions
+- Orbit/pan/zoom, a block legend, and a **colour by operation** toggle that
+  shows which shape operation placed each block
+- Blocks are flat colours, not Minecraft textures (see [3D viewer](#3d-viewer))
 
 **open_output_folder** - Opens the output location in the OS file manager
 - Works on Windows (Explorer), macOS (Finder), and Linux (xdg-open)
@@ -233,6 +244,37 @@ mod and is absent on 1.13–1.16, so prefer `litematic` when you want a blueprin
 
 Alternatively, use **MCEdit**, **Amulet Editor**, or other schematic tools.
 
+### 3D viewer
+
+Ask Claude to *show* you a build and it calls `show_structure`, which starts a
+local viewer and prints a link:
+
+```
+Build a small stone cottage and show it to me
+```
+
+Open `http://127.0.0.1:8791/` once and leave the tab open. Each time Claude
+revises the build, the page picks up the new version on its own — no reload.
+
+- **Orbit** drag · **Zoom** scroll · **Pan** right-drag or two-finger drag
+- **Colour by operation** recolours every block by which shape operation placed
+  it, which makes "the roof is too steep" easy to point at
+- The legend lists visible blocks with counts
+
+Two things to know about what you are looking at:
+
+- **Colours are flat, not Minecraft textures.** Minecraft's textures are Mojang's
+  and cannot be redistributed, so each block is drawn as a representative colour.
+  Shape, proportion and material choice read clearly; surface detail does not.
+- **Enclosed blocks are not drawn.** A block with all six neighbours filled can
+  never be seen, so it is skipped. The header shows the split, e.g.
+  `528 blocks (409 visible, 119 enclosed)`.
+
+The viewer binds `127.0.0.1` only, so nothing outside your machine can reach it.
+It needs an internet connection on first load, because three.js is fetched from a
+CDN; to run fully offline, vendor `three.module.js` and `OrbitControls.js` next to
+`web/static/index.html` and point its import map at them.
+
 ## JSON Structure Format
 
 A structure is defined by a `name` plus any mix of **`operations`** (declarative
@@ -314,11 +356,18 @@ minecraft-builder-claude-mcp-server/
 │   ├── server.py            # MCP server and tool definitions
 │   ├── schema.py            # Pydantic models + shape operations
 │   ├── shapes.py            # Pure geometry generators
-│   ├── converter.py         # JSON to .schem converter
+│   ├── converter.py         # JSON to .schem / .litematic converters
 │   ├── versions.py          # Version support + block-ID validation
+│   ├── preview.py           # ASCII preview + stats
+│   ├── colors.py            # Flat display colours for the 3D viewer
 │   ├── style.py             # Style guide loader + compact checklist
 │   ├── preview.py           # ASCII preview + structure stats
 │   ├── paths.py             # Path resolution and file-manager opening
+│   ├── web/                 # Local 3D viewer
+│   │   ├── app.py           # localhost HTTP server (stdlib only)
+│   │   ├── state.py         # Current structure + version history
+│   │   ├── payload.py       # Compact JSON for the browser
+│   │   └── static/          # index.html, viewer.js, style.css
 │   └── data/
 │       ├── style_guide.md   # The build style guide
 │       ├── block_versions.tsv  # Block -> version span index (1200 blocks)

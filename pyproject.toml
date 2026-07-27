@@ -31,6 +31,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 minecraft_builder = ["data/*.tsv", "data/*.json", "data/*.md"]
+# Viewer frontend, served by the local HTTP server at runtime.
+"minecraft_builder.web" = ["static/*"]
 
 [tool.ruff]
 line-length = 100
