@@ -1,11 +1,11 @@
 """Converts JSON structure definitions to Minecraft schematic files."""
 
 from pathlib import Path
-from typing import Tuple
 
-from mcschematic import MCSchematic, MCStructure, Version
+from mcschematic import MCSchematic, MCStructure
 
-from .schema import MinecraftStructure, StructureSize
+from .schema import MinecraftStructure
+from .versions import DEFAULT_VERSION, mcschematic_version
 
 
 class SchematicConverter:
@@ -24,7 +24,11 @@ class SchematicConverter:
         return f"minecraft:{block_id}"
 
     @staticmethod
-    def to_schematic(structure: MinecraftStructure, output_path: str) -> str:
+    def to_schematic(
+        structure: MinecraftStructure,
+        output_path: str,
+        version: str = DEFAULT_VERSION,
+    ) -> str:
         """Convert a MinecraftStructure to a .schem file.
 
         The full block map (explicit blocks + expanded shape operations) is
@@ -34,10 +38,12 @@ class SchematicConverter:
         Args:
             structure: The structure to convert.
             output_path: Path where the .schem file will be saved.
+            version: Target Minecraft version (see versions.SUPPORTED_VERSIONS).
 
         Returns:
             Absolute path to the created file.
         """
+        schem_version = mcschematic_version(version)
         block_map = structure.expand()
 
         mc_structure = MCStructure()
@@ -61,7 +67,7 @@ class SchematicConverter:
         schem.save(
             outputFolderPath=str(output_file.parent),
             schemName=schem_name,
-            version=Version.JE_1_19_4,
+            version=schem_version,
         )
 
         return str(output_file.absolute())
