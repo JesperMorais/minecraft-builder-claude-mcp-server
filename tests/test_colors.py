@@ -9,6 +9,7 @@ from minecraft_builder.colors import (
     _DYES,
     _EXACT,
     _WOODS,
+    _hashed,
     block_color,
     block_hex,
     is_visible,
@@ -100,6 +101,48 @@ def test_stripped_and_infixed_wood_names_resolve_to_bark():
 ])
 def test_shape_variant_inherits_material_colour(variant, base):
     assert block_color(variant) == block_color(base)
+
+
+def test_wrapping_prefixes_inherit_what_they_wrap():
+    # Waxing copper stops it oxidising; it does not change what it looks like.
+    assert block_color("waxed_copper_block") == block_color("copper_block")
+    assert block_color("potted_fern") == block_color("fern")
+
+
+@pytest.mark.parametrize("block,stage", [
+    ("exposed_cut_copper", "exposed_copper"),
+    ("weathered_copper_grate", "weathered_copper"),
+    ("oxidized_chiseled_copper", "oxidized_copper"),
+    ("waxed_weathered_cut_copper_stairs", "weathered_copper"),
+])
+def test_copper_takes_the_colour_of_its_oxidation_stage(block, stage):
+    # Green weathered copper rendering as orange copper would misreport the one
+    # thing a builder chose it for.
+    assert block_color(block) == block_color(stage)
+
+
+# --------------------------------------------------------------------------- #
+# Common building blocks must reach a curated colour
+# --------------------------------------------------------------------------- #
+
+# Every one of these used to land on the hash, which draws a valid block as an
+# arbitrary muted colour — a purple cut_sandstone reads to a judge (or to the
+# model looking at its own render) as a palette mistake that isn't there.
+_MUST_BE_CURATED = [
+    "cut_sandstone", "cut_sandstone_slab", "cut_red_sandstone",
+    "chiseled_red_sandstone", "dirt_path", "grass_path", "farmland",
+    "short_grass", "fern", "pale_moss_block", "leaf_litter",
+    "lightning_rod", "end_rod", "candle", "iron_chain", "copper_lantern",
+    "gilded_blackstone", "polished_tuff", "tuff_brick_stairs",
+    "chiseled_deepslate", "cracked_nether_bricks", "resin_bricks",
+    "iron_door", "quartz_stairs", "purpur_slab", "copper_bars",
+    "bell", "blast_furnace", "water_cauldron", "flower_pot",
+]
+
+
+@pytest.mark.parametrize("block", _MUST_BE_CURATED)
+def test_common_building_blocks_do_not_fall_back_to_the_hash(block):
+    assert block_color(block) != _hashed(block)
 
 
 # --------------------------------------------------------------------------- #

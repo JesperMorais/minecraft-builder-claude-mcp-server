@@ -13,8 +13,10 @@ block set including blocks that do not exist yet:
    covers wool, concrete, terracotta, stained glass, carpets and friends without
    listing 200 entries.
 3. Structural rules — wood families by suffix (log vs leaves vs planks), then
-   shape suffixes (``_stairs``, ``_slab``, ``_wall``, ...) stripped and retried,
-   so ``polished_andesite_stairs`` inherits from ``polished_andesite``.
+   shape suffixes (``_stairs``, ``_slab``, ``_wall``, ...) and wrapping prefixes
+   (``waxed_``, ``potted_``) stripped and retried, so
+   ``polished_andesite_stairs`` inherits from ``polished_andesite`` and
+   ``waxed_exposed_cut_copper_slab`` from ``exposed_copper``.
 4. A deterministic hash, kept in a muted range. Stable across runs and processes
    (``hash()`` is not), so an unrecognised or modded block always renders the
    same colour rather than flickering between sessions.
@@ -132,15 +134,25 @@ _EXACT: Dict[str, RGB] = {
     "polished_granite": (154, 106, 88),
     "calcite": (223, 223, 218),
     "tuff": (108, 109, 102),
+    "polished_tuff": (100, 101, 95),
+    "tuff_bricks": (93, 94, 88),
+    "chiseled_tuff": (95, 96, 90),
+    "chiseled_tuff_bricks": (90, 91, 85),
     "dripstone_block": (134, 107, 92),
     "deepslate": (77, 77, 80),
     "cobbled_deepslate": (77, 77, 80),
     "polished_deepslate": (72, 72, 74),
+    "chiseled_deepslate": (68, 68, 70),
     "deepslate_bricks": (71, 71, 73),
+    "cracked_deepslate_bricks": (69, 69, 71),
     "deepslate_tiles": (54, 54, 56),
+    "cracked_deepslate_tiles": (52, 52, 54),
     "blackstone": (42, 36, 41),
+    "gilded_blackstone": (63, 48, 40),
     "polished_blackstone": (53, 48, 56),
     "polished_blackstone_bricks": (48, 42, 49),
+    "chiseled_polished_blackstone": (48, 43, 50),
+    "cracked_polished_blackstone_bricks": (46, 41, 48),
     "basalt": (80, 80, 86),
     "polished_basalt": (99, 98, 96),
     "smooth_basalt": (72, 72, 80),
@@ -151,6 +163,9 @@ _EXACT: Dict[str, RGB] = {
     "dirt": (134, 96, 67),
     "coarse_dirt": (119, 85, 59),
     "rooted_dirt": (144, 103, 76),
+    "dirt_path": (151, 122, 66),
+    "grass_path": (151, 122, 66),  # the pre-1.17 name for dirt_path
+    "farmland": (110, 74, 44),
     "grass_block": (95, 159, 53),
     "podzol": (91, 63, 24),
     "mycelium": (111, 99, 100),
@@ -161,9 +176,12 @@ _EXACT: Dict[str, RGB] = {
     "red_sand": (190, 102, 33),
     "sandstone": (216, 203, 155),
     "smooth_sandstone": (224, 213, 165),
+    "cut_sandstone": (219, 206, 158),
     "chiseled_sandstone": (216, 203, 155),
     "red_sandstone": (186, 99, 29),
     "smooth_red_sandstone": (181, 97, 31),
+    "cut_red_sandstone": (184, 98, 31),
+    "chiseled_red_sandstone": (180, 96, 33),
     "snow": (249, 254, 254),
     "snow_block": (249, 254, 254),
     "ice": (145, 183, 253),
@@ -178,7 +196,12 @@ _EXACT: Dict[str, RGB] = {
     "mud_bricks": (137, 105, 78),
     "packed_mud": (150, 103, 76),
     "nether_bricks": (44, 21, 26),
+    "chiseled_nether_bricks": (43, 21, 26),
+    "cracked_nether_bricks": (42, 20, 25),
     "red_nether_bricks": (69, 6, 8),
+    "resin_bricks": (185, 90, 34),
+    "chiseled_resin_bricks": (180, 88, 33),
+    "resin_block": (232, 121, 42),
     "terracotta": _TERRACOTTA_BASE,
     "quartz_block": (235, 229, 222),
     "smooth_quartz": (236, 230, 224),
@@ -203,6 +226,12 @@ _EXACT: Dict[str, RGB] = {
     "coal_block": (16, 15, 15),
     "amethyst_block": (134, 102, 189),
     "copper_block": (192, 107, 79),
+    "cut_copper": (191, 106, 78),
+    "chiseled_copper": (188, 105, 77),
+    "copper_grate": (180, 101, 75),
+    "copper_bulb": (197, 121, 86),
+    "copper_chain": (176, 100, 74),
+    "lightning_rod": (176, 100, 74),
     "exposed_copper": (161, 125, 103),
     "weathered_copper": (108, 153, 111),
     "oxidized_copper": (82, 162, 132),
@@ -217,10 +246,15 @@ _EXACT: Dict[str, RGB] = {
     "lantern": (240, 180, 100),
     "soul_lantern": (100, 200, 210),
     "soul_torch": (100, 200, 210),
+    "copper_lantern": (232, 160, 92),
+    "copper_torch": (245, 185, 110),
     "campfire": (200, 120, 60),
+    "soul_campfire": (90, 190, 200),
     "redstone_lamp": (95, 59, 32),
     "jack_o_lantern": (213, 145, 47),
     "froglight": (240, 235, 190),
+    "end_rod": (226, 226, 216),
+    "candle": (226, 214, 186),
     # Nether
     "netherrack": (97, 38, 38),
     # Nylium is ground, not wood, so it needs to beat the crimson/warped rule.
@@ -234,6 +268,23 @@ _EXACT: Dict[str, RGB] = {
     # Plants and organics
     "moss_block": (89, 109, 45),
     "moss_carpet": (89, 109, 45),
+    "pale_moss_block": (122, 132, 113),
+    "pale_moss_carpet": (122, 132, 113),
+    "pale_hanging_moss": (128, 137, 118),
+    "grass": (99, 152, 60),
+    "short_grass": (99, 152, 60),  # the 1.20.3+ name for grass
+    "tall_grass": (94, 146, 56),
+    "short_dry_grass": (170, 143, 84),
+    "fern": (87, 130, 56),
+    "large_fern": (83, 125, 53),
+    "bush": (84, 118, 52),
+    "firefly_bush": (96, 118, 58),
+    "sweet_berry_bush": (88, 112, 52),
+    "dead_bush": (148, 113, 57),
+    "cactus": (86, 126, 47),
+    "leaf_litter": (150, 111, 60),
+    "wildflowers": (108, 140, 62),
+    "pink_petals": (231, 176, 196),
     "hay_block": (166, 138, 21),
     "bone_block": (209, 206, 179),
     "melon": (112, 146, 30),
@@ -255,22 +306,42 @@ _EXACT: Dict[str, RGB] = {
     "tinted_glass": (44, 42, 47),
     "iron_bars": (120, 120, 120),
     "chain": (67, 71, 80),
+    "iron_chain": (67, 71, 80),  # the 1.21.9+ name for chain
     "scaffolding": (176, 137, 78),
     "ladder": (137, 106, 61),
     # Utility blocks that show up in builds
     "crafting_table": (137, 91, 51),
     "furnace": (110, 110, 110),
+    "blast_furnace": (85, 85, 87),
+    "smoker": (94, 82, 71),
+    "smithing_table": (58, 58, 65),
+    "stonecutter": (117, 113, 108),
+    "grindstone": (129, 111, 88),
+    "lectern": (150, 118, 71),
+    "composter": (123, 92, 52),
     "chest": (162, 124, 60),
     "barrel": (127, 100, 57),
     "bookshelf": (154, 122, 74),
+    "chiseled_bookshelf": (150, 119, 72),
     "cauldron": (63, 63, 63),
+    "water_cauldron": (60, 68, 92),
     "anvil": (69, 69, 69),
+    "bell": (222, 178, 74),
     "note_block": (98, 66, 46),
     "jukebox": (100, 68, 49),
     "loom": (139, 114, 74),
     "beehive": (159, 125, 72),
     "target": (219, 194, 178),
+    "flower_pot": (150, 92, 66),
+    "decorated_pot": (152, 96, 71),
     "white_glazed_terracotta": (226, 226, 219),
+    # Bare material names, which are not blocks in their own right: the
+    # shape-suffix retry below lands here for iron_door, copper_bars,
+    # quartz_stairs, purpur_slab and the rest of their families.
+    "iron": (202, 202, 204),
+    "copper": (192, 107, 79),
+    "quartz": (235, 229, 222),
+    "purpur": (169, 125, 169),
 }
 
 
@@ -306,6 +377,12 @@ _SHAPE_SUFFIXES = (
     "_pressure_plate", "_button", "_hanging_sign", "_wall_sign", "_sign",
     "_pane", "_bars", "_pillar",
 )
+
+# Prefixes that wrap another block without changing how it reads as a flat
+# colour: waxed copper is the same colour as the copper it was waxed from, and a
+# potted fern is a fern. Stripping these covers the ~60 waxed copper blocks and
+# every potted plant with no table entries of their own.
+_INHERITED_PREFIXES = ("waxed_", "potted_")
 
 
 def _contains_token(name: str, token: str) -> bool:
@@ -351,6 +428,22 @@ def _wood(name: str) -> RGB | None:
         if any(remainder.endswith(s) for s in _BARK_SUFFIXES):
             return bark
         return planks
+    return None
+
+
+def _copper_stage(name: str) -> RGB | None:
+    """Resolve a copper block by how far it has oxidised.
+
+    Every copper shape exists at every stage — ``exposed_cut_copper``,
+    ``weathered_copper_grate``, ``oxidized_chiseled_copper`` — and the stage is
+    what you see, so matching the stage beats listing the whole matrix. The
+    unoxidised forms are ordinary ``_EXACT`` entries.
+    """
+    if "copper" not in name:
+        return None
+    for stage in ("exposed", "weathered", "oxidized"):
+        if name.startswith(stage + "_"):
+            return _EXACT[f"{stage}_copper"]
     return None
 
 
@@ -405,13 +498,22 @@ def block_color(block_id: str) -> RGB:
         if wood is not None:
             return wood
 
-        # Strip a shape suffix and try again; retry the plural form too, so
-        # "stone_brick_stairs" reaches "stone_bricks".
+        copper = _copper_stage(name)
+        if copper is not None:
+            return copper
+
+        # Strip a shape suffix or an inherited prefix and try again; retry the
+        # plural form too, so "stone_brick_stairs" reaches "stone_bricks".
         stripped = None
         for suffix in _SHAPE_SUFFIXES:
             if name.endswith(suffix) and len(name) > len(suffix):
                 stripped = name[: -len(suffix)]
                 break
+        if stripped is None:
+            for prefix in _INHERITED_PREFIXES:
+                if name.startswith(prefix) and len(name) > len(prefix):
+                    stripped = name[len(prefix):]
+                    break
         if stripped is None:
             break
         if stripped not in _EXACT and (stripped + "s") in _EXACT:
