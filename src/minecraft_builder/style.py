@@ -23,7 +23,9 @@ STYLE_GUIDE_FILE = "style_guide.md"
 STYLE_CHECKLIST = """BUILD QUALITY — for anything larger than a few dozen blocks, call
 get_build_style_guide first. These rules apply regardless:
 - Palette: 3-5 blocks in a ~50/30/20 split. The roof material must differ from
-  the walls. One block dominating the whole build is the #1 amateur tell.
+  the walls. One block dominating the whole build is the #1 amateur tell. A
+  masonry primary needs a non-stone secondary or accent — wood, a plank deck, a
+  contrasting cap. Cracked and mossy variants are texture, not a second material.
 - Depth: no flat wall face longer than 6-8 blocks. Add pillars (+1 out), inset
   windows (-1 in), a base plinth, and a roofline cornice.
 - Roof: real pitch (stairs give 45 degrees), overhang 1-2 blocks past the walls,
@@ -34,6 +36,8 @@ get_build_style_guide first. These rules apply regardless:
 - Light: one lantern per 6-8 blocks of facade and one per interior room. Prefer
   lantern over torch. A build with no light sources looks dead.
 - Silhouette: break the rectangle (L/T/U footprint, or a wing, bay or tower).
+  Both sides 10+ blocks: the body must project something 3+ deep and a quarter
+  of the facade wide. The roof does not count toward this.
 - Interior: carve it with "air", give it a floor, and light it."""
 
 # Returned with every render, so it has to stay short enough to reread each

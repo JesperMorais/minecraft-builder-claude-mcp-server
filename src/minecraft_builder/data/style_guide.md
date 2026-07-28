@@ -34,12 +34,19 @@ build. Using twelve is the second clearest.
 | **Accent** | ~20% | Trim, corners, frames — the only high-contrast element |
 | **Detail** | trace | Lights, plants, shutters, railings |
 
-Two hard rules:
+Three hard rules:
 
 - **The roof is never the same material as the walls.** Contrast is what makes a
   roofline read as a roofline.
 - **Secondary must be close in tone to primary, accent must be far.** Three
   equally-contrasting materials look like a patchwork, not a palette.
+- **A stone build needs something that is not stone.** If the primary is
+  masonry — stone, brick, deepslate, blackstone, sandstone — then the secondary
+  or the accent must come from a different family: wood beams and posts, a plank
+  deck or floor, a contrasting cap, band or roof. Cracked, mossy and chiselled
+  variants of the same grey are *texture*, not a second material; they belong in
+  the 60/30/10 scatter below and count for nothing here. Grey end-to-end is the
+  most common way a technically correct build still looks unfinished.
 
 ### Palette library
 
@@ -51,10 +58,12 @@ Trim: `stripped_oak_log[axis=y]` corner posts, `oak_stairs`, `cobblestone_wall`
 Texture-mates for cobblestone: `mossy_cobblestone`, `andesite`, `gravel`
 Roof: `dark_oak_stairs` or `deepslate_tile_stairs`
 
-**Castle / fortress** — `stone_bricks` 50 · `cracked_stone_bricks` 30 · `polished_andesite` 20
-Trim: `stone_brick_wall` battlements, `chiseled_stone_bricks` belt course, `dark_oak_trapdoor` arrow slits
-Texture-mates: `mossy_stone_bricks`, `andesite`, `cobblestone`
+**Castle / fortress** — `stone_bricks` 50 · `polished_andesite` 30 · `dark_oak_planks` 20
+Trim: `stone_brick_wall` battlements, `chiseled_stone_bricks` belt course, `dark_oak_trapdoor` arrow slits, `stripped_dark_oak_log` beams and hoardings
+Texture-mates: `cracked_stone_bricks`, `mossy_stone_bricks`, `andesite`, `cobblestone` — scatter only; none of them is the secondary
 Roof: `deepslate_tile_stairs`, `dark_oak_stairs`
+The wood is not optional. A gatehouse in nothing but grey masonry is the
+worked example of the third hard rule above.
 
 **Cottage / storybook** — `oak_planks` 50 · `spruce_planks` 30 · `cobblestone` 20
 Trim: `stripped_spruce_log`, `oak_fence`, `oak_trapdoor` shutters
@@ -185,6 +194,21 @@ Judged from a distance, only the outline matters.
   the chimney off-centre, make one wing shorter.
 - **Add a vertical accent**: chimney, tower, spire, flagpole (`oak_fence` stack),
   `lightning_rod`.
+
+### The footprint rule
+
+Hard requirement, not a preference. **If both horizontal sides are 10 blocks or
+more, the body must project at least one element out of its rectangle: a wing,
+porch, bay or tower, at least 3 blocks deep and at least a quarter of the longer
+facade wide.** On a 16×12 building that is a projection 3+ deep and 4+ wide.
+Anything shallower reads as a bump in the wall, not as massing.
+
+**The roof never counts toward this.** A barrel vault, a cupola, a dramatic
+pitch — put any of them on a plain prism and the outline is still a plain prism
+with a hat. The body has to carry the silhouette; the roof then has something to
+sit on. This is the one rule where the fix is almost free: a projecting wing is
+one more `cuboid` plus its own short roof section, and it does more for the
+build seen from a distance than every detail pass combined.
 
 ---
 
@@ -414,11 +438,13 @@ Each of these appeared in this repo's own `examples/japanese_pagoda.json`
 | Anti-pattern | Fix |
 |---|---|
 | One block dominating >50% of the build | Apply the 50/30/20 palette |
+| Grey masonry end to end, varied only by cracked/mossy | Make the secondary or accent a non-stone family: wood beams, a plank deck, a contrasting cap |
 | Zero stairs or slabs | Stairs/slabs are the detail workhorses — trim, roofs, sills |
 | Zero light sources | One light per 6–8 blocks of facade, one per room |
 | Roof same material as walls | Contrast the roof |
 | Flat unbroken wall face | Pillars, inset, plinth, cornice |
 | Perfectly square footprint | ~1:1.5, and break the rectangle |
+| 10+ blocks each way with only the roof breaking the outline | Project a wing, porch or bay from the body: 3+ deep, a quarter of the facade wide |
 | Solid interior / no carved space | Carve with `air`, floor and light every room |
 | Build stops flat at its base | Foundation plinth + ground scatter |
 | Hundreds of `block` ops for a wall | Use `cuboid`; reserve `block` for scatter and detail |
@@ -431,11 +457,15 @@ Run this before every `create_minecraft_structure` call. If you cannot answer
 yes, fix the JSON first.
 
 1. **Palette** — 3–5 blocks, roughly 50/30/20? Roof material ≠ wall material?
+   Masonry primary: is the secondary or accent from a non-stone family, and not
+   just a cracked or mossy variant of the same grey?
 2. **Depth** — at least 3 depth techniques applied? No flat face over 6–8 blocks?
 3. **Texture** — a sparse accent scatter on large wall faces?
 4. **Proportion** — 3+ headroom, 4–5 per story, roof rise in the 4–10 band?
 5. **Roof** — real pitch, arithmetic checked to a 1–2 wide ridge, overhangs 1–2 blocks, ridge capped?
-6. **Silhouette** — not a plain box? One taller focal element?
+6. **Silhouette** — not a plain box? One taller focal element? Both sides 10+
+   blocks: does the *body* project a wing, porch, bay or tower at least 3 deep
+   and a quarter of the longer facade wide? (The roof does not count.)
 7. **Openings** — doors 2×3, windows inset with glass set 1 back?
 8. **Light** — one per 6–8 blocks of facade, one per interior room?
 9. **Ground** — foundation plinth and a base transition?
