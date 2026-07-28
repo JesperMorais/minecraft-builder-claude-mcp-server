@@ -1,7 +1,7 @@
 # Design: Web UI for Minecraft Builder
 
-**Status:** proposal
-**Date:** 2026-07-27
+**Status:** Phases 0–2 built; Phase 3 not started (§13 has the current state)
+**Date:** 2026-07-27, revised 2026-07-28
 
 Two stages, deliberately ordered:
 
@@ -13,11 +13,27 @@ Two stages, deliberately ordered:
 
 ---
 
-## 1. The mechanism: Claude Code *channels*
+## 1. The mechanism: two paths, not one
 
 The obvious objection to Stage 1 is that MCP is model-driven — a website cannot push a
-prompt into a running Claude session. That objection is out of date. Claude Code has a
-feature for exactly this:
+prompt into a running Claude session. There are two answers, and the design needs both,
+because the more elegant one is not always available.
+
+| Path | How a browser prompt reaches Claude | Requires |
+|---|---|---|
+| **Channels** (§1.1) | The server pushes an event into the session | Research-preview flag, Anthropic auth, org permission |
+| **Polling** (§1.2) | Claude calls `await_prompt`, which blocks until a prompt arrives | Nothing. An ordinary tool call |
+
+This document was originally written assuming channels were *the* mechanism. They are not
+available in the environment this was built in — see §1.4 — so `await_prompt` was added and
+is the path that actually carries traffic here. Channels remain supported and take
+precedence once they have proven they work.
+
+The two are not redundant. Channels leave the terminal session free between messages, which
+is the better product; polling occupies it with a wait loop but is subject to no gate
+whatsoever. Neither subsumes the other, so both stay.
+
+### 1.1 Channels
 
 > **A channel is an MCP server that pushes events into your running Claude Code session.**
 > Channels can be two-way: Claude reads the event and replies back through the same channel.
@@ -37,7 +53,33 @@ precisely the product shape we want — we are adding a 3D viewport and structur
 | Steer Claude | the `instructions` string on the Server constructor — injected into Claude's system prompt |
 | Enable | `claude --dangerously-load-development-channels server:minecraft-builder` |
 
-### 1.1 Verified: this works from Python
+### 1.2 Polling: the `await_prompt` inversion
+
+Channels invert MCP's direction, which is what makes them gated. Polling gets the same
+result without inverting anything: prompts wait in a server-side queue, and Claude collects
+them with `await_prompt`, an ordinary tool call that blocks (long-poll, default 240 s per
+round, ceiling 540 s to stay inside the MCP client's own timeout). No policy gates a tool
+call, so this works on a stock session, on Bedrock/Vertex/Foundry, and with no flag.
+
+Claude runs it as a loop: call `await_prompt`, handle whatever comes back with
+`show_structure`, answer with `reply`, call `await_prompt` again. A timeout is not an error,
+just a quiet round. The `instructions` string teaches this loop, same as it teaches the
+channel workflow.
+
+The cost is that the terminal session is occupied while the loop runs, and each round is a
+tool call. That is a real downside and the reason channels are still preferred when they
+work.
+
+**Delivery has three grades here**, which is what lets the UI stop guessing (§4.3):
+
+- `waiting` — an `await_prompt` call is blocked on the queue right now. A prompt enqueued
+  this instant arrives in milliseconds.
+- `polling` — nobody is blocked, but a take happened within the grace window (900 s, which
+  covers a full wait round plus the build-and-reply work between two rounds), so the loop is
+  between rounds and will be back.
+- neither — the prompt is stored, but nothing suggests anyone will collect it.
+
+### 1.3 Verified: this works from Python
 
 The documented examples are all Bun, and the reference says the only hard requirement is
 "the MCP SDK and a Node.js-compatible runtime". That would have forced a second process,
@@ -66,7 +108,10 @@ no IPC, no duplicated geometry model.
 version and add a test asserting the serialized frame, since this relies on the SDK not
 tightening that annotation.
 
-### 1.2 Preview caveats — read before committing
+### 1.4 Preview caveats — read before committing
+
+**These apply to channels only.** Polling (§1.2) is subject to none of them, which is the
+whole reason it exists.
 
 - **Research preview.** The `--channels` flag syntax and the protocol contract may change.
   Neither flag appears in `claude --help`.
@@ -80,14 +125,32 @@ tightening that annotation.
 - Personal Pro/Max accounts skip the org checks entirely. Team/Enterprise needs an admin to
   set `channelsEnabled`.
 
+**This project hit that last one.** The account this was developed on is on a plan where
+channels are disabled, and startup reports *"blocked by org policy … have an administrator
+set `channelsEnabled: true`"*. **No code change fixes it** — it needs an Owner at claude.ai →
+Admin settings → Claude Code → Channels, and server-delivered policy beats any local
+`managed-settings.json`. Do not spend time looking for a workaround; there isn't one. This is
+not a footnote, it is why §1.2 exists and why the channel path cannot be the only one.
+
 **The failure mode that will cost the most debugging time:** notifications are
 fire-and-forget with no acknowledgement. If the session wasn't started with the flag, or org
 policy blocks it, **events are dropped silently** — the browser posts a prompt and nothing
-whatsoever happens. Mitigation in §4.3.
+whatsoever happens.
+
+Worse, the drop is invisible from the sending side too. `ChannelBridge.push()` reports that
+the frame reached the transport, and the bridge is attached for every stdio session whether
+or not the channel is enabled, so a successful write says nothing about whether Claude
+received anything. This is not a theoretical concern: trusting `push()` as delivery meant
+browser prompts were destroyed outright in exactly this configuration, because the code
+treated a successful push as reason not to queue the prompt for `await_prompt` either.
+Mitigations in §4.3.
 
 ---
 
-## 2. What exists today
+## 2. What existed at the start
+
+Kept as written, because the plan below was built on it and the reasoning only makes sense
+against this starting point. For the layout as it stands now, see §5.
 
 | File | Lines | Role | Stage 1 use |
 |---|---:|---|---|
@@ -114,33 +177,50 @@ compiles on export. Nothing reads a schematic back.
 ┌──── Browser · http://127.0.0.1:8791 ─────────────────────────────┐
 │  chat pane        3D viewport (three.js)      annotation tray    │
 └───┬──────────────────────▲───────────────────────┬───────────────┘
-    │ POST /prompt         │ GET /events (SSE)     │ POST /annotations
+    │ POST /api/prompt     │ GET /api/events (SSE) │ POST /annotations
     ▼                      │                       ▼
 ┌───────────── ONE Python process ─────────────────────────────────┐
-│  web/  aiohttp (or uvicorn) on 127.0.0.1 — static UI + JSON API  │
-│  channel/  notifications/claude/channel  ──────────────┐         │
-│  tools/  reply · show_structure · get_annotations · export        │
-│  state/  current structure + version list + annotations (memory  │
-│          + JSON file on disk, no database)                       │
-│  core/   schema · shapes · converter · versions  (imported)      │
-└──────────────────────────┬───────────────────────────────┼───────┘
-                    stdio  │ (Claude Code spawned us)      │
-                           ▼                               │
-                  ┌────────────────────────┐               │
-                  │  Claude Code session   │◄──────────────┘
-                  │  = the agent. No API   │  <channel …>prompt</channel>
-                  │  key, no loop to write │
-                  └────────────────────────┘
+│  web/app.py    http.server on 127.0.0.1 — static UI + JSON API   │
+│  web/channel.py   PUSH path: notifications/claude/channel  ──┐   │
+│  web/prompts.py   PULL path: queue, drained by await_prompt ─┼─┐ │
+│  web/chat.py      transcript + SSE bus                       │ │ │
+│  web/state.py     current structure + version                │ │ │
+│  server.py     reply · await_prompt · show_structure · export │ │ │
+│  core/   schema · shapes · converter · versions · lint (imported) │
+└──────────────────────────┬───────────────────────────────────┼─┼─┘
+                    stdio  │ (Claude Code spawned us)          │ │
+                           ▼                                   │ │
+                  ┌────────────────────────┐                   │ │
+                  │  Claude Code session   │◄──────────────────┘ │
+                  │  = the agent. No API   │  <channel …>prompt<…>│
+                  │  key, no loop to write │─────────────────────┘
+                  └────────────────────────┘   await_prompt returns
+                                               the queued prompt
 ```
+
+Two arrows into the session, and they are genuinely different directions: the channel
+**pushes** (server-initiated, gated, unacknowledged), `await_prompt` **is pulled** (Claude
+initiates, ungated, and the pull itself is the acknowledgement). Everything else in the
+process is shared.
 
 The thing to notice: **there is no agent layer to build.** Stage 1 has no tool-use loop, no
 model selection, no prompt caching, no streaming assembly, no token budget, no cost. Claude
 Code is the agent. That deletes most of the engineering in the original hosted design and is
 why this ordering is right.
 
-**Round trip:** browser `POST /prompt` → notification into the session → Claude reasons,
-calls `show_structure(...)` → tool handler pushes onto an `asyncio.Queue` → SSE to browser →
-viewport re-renders → Claude calls `reply("added a doorway on the south face")` → chat pane.
+**Round trip, channel path:** browser `POST /api/prompt` → notification into the session →
+Claude reasons, calls `show_structure(...)` → version bumped, SSE `structure` frame to the
+browser → viewport re-renders → Claude calls `reply("added a doorway on the south face")` →
+SSE `message` frame → chat pane.
+
+**Round trip, polling path:** Claude is already blocked in `await_prompt` → browser
+`POST /api/prompt` → the prompt is queued and the blocked call returns it → identical from
+`show_structure` onwards → Claude calls `await_prompt` again.
+
+**Both at once:** the prompt is queued *and* pushed until the channel proves itself, because
+a push cannot be distinguished from a silently dropped push (§1.4). Once a `reply` confirms
+the channel, the push is trusted alone and the queued insurance copies are dropped, so
+`await_prompt` cannot hand back a prompt that has already been answered.
 
 ---
 
@@ -181,7 +261,8 @@ running a channel). Add four:
 | `show_structure` | Accepts a full structure; validates, stores as a new version, pushes to the viewport. **The tool the whole product hangs on.** |
 | `patch_operations` | `[{index, action: replace\|insert\|delete, operation}]`. Makes "the roof is too steep" a one-op edit instead of re-emitting 200 ops. |
 | `get_annotations` | Open markup, each pre-resolved to an operation index + summary (§6.1, §8). |
-| `reply` | Channel reply → chat pane. Params `{chat_id, text}` per convention. |
+| `reply` | Reply → chat pane. Params `{chat_id, text}` per convention. Also the channel's proof of life: a reply is the only evidence the push round trip closes, so it latches `ChannelBridge.confirm()`. |
+| `await_prompt` | Blocks until a browser prompt arrives, then returns it (§1.2). The chat path that needs no flag and no permission. |
 
 Notes:
 - Validate through Pydantic inside every tool and return the `ValidationError` text with
@@ -195,25 +276,64 @@ Notes:
 ### 4.3 Liveness — the silent-drop problem
 
 Because notifications are unacknowledged, the browser cannot tell "Claude is thinking" from
-"the channel never registered". Handle it explicitly:
+"the channel never registered". This section cost more debugging time than the rest of the
+design combined, so it is written as what was built, not what was proposed.
 
-- Bind the HTTP server only after `mcp.connect()` succeeds, so a reachable page implies
-  Claude Code did spawn us.
-- Show a **"waiting for Claude…"** state on `POST /prompt`, and after ~20s with no tool call
-  surface the actual likely cause: *"No response. Was Claude Code started with
-  `--dangerously-load-development-channels server:minecraft-builder`?"*
+**The rule: never paint a claim the server cannot support.** One `_link_status()` answers
+"does chat work", and `/api/status`, the SSE snapshot and the `POST /api/prompt` reply all
+return it, so they cannot disagree. Its keys divide cleanly into evidence and non-evidence:
+
+| Key | Evidence of delivery? |
+|---|---|
+| `waiting` | Yes — an `await_prompt` is blocked on the queue right now |
+| `polling` | Yes — a take happened within the grace window; the loop is between rounds |
+| `confirmed` | Yes — a pushed event came back answered, the only proof the channel works |
+| `attached` | **No.** An MCP session exists over stdio. True with the channel disabled, true with it blocked by policy |
+| `events_sent`, `queued` | Diagnostics only |
+
+The status dot has three colours, and the middle one is the point: green for the three
+evidence keys, **amber** for `attached` alone, red for nothing. Amber is not a failure state —
+it means "something is there and nothing has proven it", which is the honest description of a
+policy-blocked session. An earlier version ORed `attached` into green and reported a healthy
+link through an entire session in which not one prompt was delivered.
+
+- Queue the prompt as well as pushing it until the channel is confirmed. A push that cannot
+  be verified must not be the only delivery path; that mistake destroyed prompts outright.
+- After ~20 s with no reply, say so in the transcript and name the likely cause, including the
+  `await_prompt` escape hatch — it is the fix that always works.
+- Copy-pasteable hints must not end in a sentence period. `…server:minecraft-builder.` was
+  pasted verbatim and Claude Code looked for a server named `minecraft-builder.`, reporting
+  *"no MCP server configured with that name"* — a second, more confusing failure stacked on
+  the first.
 - Log every outbound notification to stderr — it shows up in
   `~/.claude/debug/<session-id>.txt`.
+
+**Testing note that matters more than it looks:** exercise the *attached* path. The suite
+originally ran entirely with the bridge detached, so `push()` never succeeded in a test and a
+bug that only appears once a session is attached stayed invisible. A fixture that attaches a
+bridge to a live loop with a stream that accepts and discards frames reproduces a
+policy-blocked client exactly.
 
 ### 4.4 Config
 
 ```json
-// .mcp.json
+// .mcp.json  — gitignored; copy .mcp.json.example
 {"mcpServers": {"minecraft-builder": {
-  "command": "python", "args": ["-m", "minecraft_builder"], "timeout": 600000}}}
+  "command": "/abs/path/to/.venv/bin/python",
+  "args": ["-m", "minecraft_builder"], "timeout": 600000}}}
 ```
 
-Launch: `claude --dangerously-load-development-channels server:minecraft-builder`
+**`command` cannot be a bare `python`.** It has to be an interpreter that can
+`import minecraft_builder`, which usually means the project virtualenv by absolute path. That
+absolute path is also why the file is gitignored rather than committed: a checked-in copy
+names one machine's interpreter and breaks every other machine, and the symptom is a server
+that silently never connects. `.mcp.json.example` is committed instead.
+
+`.mcp.json` is project-scoped, so starting Claude Code from a git worktree or any other
+directory finds no server at all.
+
+Launch: `claude --dangerously-load-development-channels server:minecraft-builder` — or don't,
+and use `await_prompt` instead (§1.2), which needs no flag.
 
 Two gotchas worth writing into the README: **`meta` keys must be identifiers** — letters,
 digits, underscores; keys with hyphens are *silently dropped*. And if Claude is mid-turn when
@@ -228,26 +348,34 @@ settings so the loop doesn't stall on approval every session.
 
 ## 5. Repo layout
 
+As built. The channel/state modules ended up under `web/` rather than at the package root,
+since they exist to serve the browser and nothing else imports them:
+
 ```
 src/minecraft_builder/          # core stays importable and framework-free
 ├── schema.py                   # + expand_with_provenance()      (§6.1)
 ├── shapes.py
 ├── converter.py                # + to_litematic()                (§9)
 ├── versions.py
-├── colors.py                   # NEW  block_id -> RGB            (§7)
+├── colors.py                   # block_id -> RGB                 (§7)
+├── lint.py                     # style guide as programmatic checks
+├── style.py                    # style guide loader
 ├── paths.py
-├── server.py                   # + channel capability, 4 tools   (§4)
-├── channel.py                  # NEW  notification model + emit helper
-├── state.py                    # NEW  structure versions + annotations
+├── server.py                   # channel capability + tools      (§4)
 └── web/
-    ├── app.py                  # NEW  localhost HTTP + SSE
-    └── static/                 # NEW  built frontend bundle
-
-web/                            # frontend source
-├── src/render/                 # three.js InstancedMesh voxel renderer
-├── src/annotate/               # picking, box select, notes
-└── src/chat/
+    ├── app.py                  # localhost HTTP + SSE
+    ├── channel.py              # PUSH: notification model, bridge, confirm()
+    ├── prompts.py              # PULL: queue drained by await_prompt
+    ├── chat.py                 # transcript + SSE event bus
+    ├── state.py                # structure versions
+    ├── payload.py              # voxel payload + occlusion culling
+    └── static/                 # index.html · viewer.js · style.css
 ```
+
+The frontend is three hand-written files served as-is, not a build. There is no bundler and
+no `web/src/` tree: the assets are re-read per request, so editing `viewer.js` needs a browser
+refresh rather than a session restart. Worth keeping unless a real dependency arrives —
+`node --check` is the only tooling, since there is no frontend test runner.
 
 ---
 
@@ -457,9 +585,10 @@ and whether operation-level annotation actually produces good revisions.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Channels are a research preview; contract may change | **High** | Isolate all channel code in `channel.py`. Pin `mcp`. Test asserting the wire frame. The MCP tools keep working without the channel, so a break degrades rather than bricks. |
+| Channels are a research preview; contract may change | **High** | Isolate all channel code in `web/channel.py`. Pin `mcp`. Test asserting the wire frame. The MCP tools keep working without the channel, so a break degrades rather than bricks. `await_prompt` is not affected at all. |
+| Channels unavailable — org policy, Bedrock/Vertex/Foundry, or no flag | **Materialised.** Blocked by org policy on the development account | `await_prompt` (§1.2). This is no longer a risk so much as the normal case, which is why polling is a first-class path rather than a fallback. |
 | Custom channels need `--dangerously-load-development-channels` indefinitely | Medium | Accept it for a personal tool. Document the flag prominently. Don't plan around allowlisting. |
-| Silent event drop when the flag is missing | Medium | §4.3 liveness UX — this will otherwise eat hours. |
+| Silent event drop when the flag is missing | **Materialised, and worse than predicted** | It ate an entire session, and the design's own mitigation was the thing that broke: treating a successful `push()` as delivery meant prompts were never queued and were destroyed outright. §4.3 — evidence only, queue until confirmed, and test the attached path. |
 | Flat colours aren't enough to judge a build | Medium | Phase 1 exists to answer this before more is built. Local jar extraction is the escape hatch. |
 | Python SDK tightens `SendNotificationT` typing | Low | Pinned `mcp` + serialization test. |
 | `litemapy` beta regression corrupts blueprints silently | Medium | Pin, round-trip test, manual in-game check per release. |
@@ -469,25 +598,45 @@ and whether operation-level annotation actually produces good revisions.
 
 ## 13. Milestones
 
-**Phase 0 — core, no UI.** `expand_with_provenance()` + tests · `to_litematic()` +
+**Phase 0 — core, no UI. ✅ Done.** `expand_with_provenance()` + tests · `to_litematic()` +
 `output_formats` on the existing tool + round-trip test · `colors.py` + generation script ·
 voxel/op caps. *Every item improves the current MCP server on its own and carries no channel
 risk. Land this regardless of what happens to the rest of the plan.*
 
-**Phase 1 — viewer, no channel.** `web/app.py` serving the UI, three.js `InstancedMesh`
-renderer, orbit/pan/zoom, flat colours, fed by a `show_structure` MCP tool called the ordinary
-way. Already useful: ask Claude Code to build something and watch it appear. Answers the
-fidelity question before anything harder.
+**Phase 1 — viewer, no channel. ✅ Done, and gone past.** `web/app.py` serving the UI, three.js
+`InstancedMesh` renderer, orbit/pan/zoom, fed by `show_structure` called the ordinary way.
+The fidelity question it existed to answer came back "flat colours are not quite enough", so
+the viewer also gained partial-block geometry (stairs, slabs, fences, panes and the rest as
+real shapes with orientation parsed from block states), generated per-material texture maps,
+sky/fog/sun-shadow, and occlusion culling that only treats full opaque cubes as enclosing.
 
-**Phase 2 — the channel.** Capability declaration, `channel.py`, `POST /prompt`, `GET /events`
-SSE, chat pane, `reply` tool, `instructions` tuning, liveness UX. **This is the milestone the
-request describes:** type in the browser, talk to the session.
+**Phase 2 — browser → session. ✅ Done, both paths.** Capability declaration,
+`web/channel.py`, `POST /api/prompt`, `GET /api/events` SSE, chat pane, `reply`,
+`instructions` tuning. Then, once channels turned out to be blocked here (§1.4),
+`web/prompts.py` and `await_prompt` — which is what actually carries traffic on this account.
+The liveness work in §4.3 belongs to this phase and was the expensive part: proof-of-delivery
+for the channel, an honest three-colour status dot, and queueing until the channel is
+confirmed.
 
-**Phase 3 — annotation loop.** Picking, point/region markup, tray, `get_annotations`,
-`patch_operations`, version history and rollback. The differentiating feature.
+Also landed alongside, unplanned: `lint.py`, the style guide encoded as programmatic checks,
+appended to every `create_minecraft_structure` and `show_structure` result so builds get
+reviewed at the moment the feedback is actionable.
 
-**Phase 4 — export polish.** Direct write to `.minecraft/schematics/`, material list, format
-picker, import instructions per format.
+**Phase 3 — annotation loop. ⬜ Not started. Next.** Picking, point/region markup, tray,
+`get_annotations`, `patch_operations`, version history and rollback. The differentiating
+feature. Design in §8; the groundwork is already in place — `expand_with_provenance()` records
+which operation last wrote each coordinate, `describe_operation()` labels an index, and the
+viewer payload already carries a per-voxel operation index (the "colour by operation" toggle
+reads it). So a click can resolve to *"operation #4, the roof pyramid"* rather than a bare
+coordinate, which is the entire point of the feature.
+
+Still needed: an `Annotation` model, server-side resolution of coordinates → operation index
+at creation time (against the version on screen, not the current one), raycast picking and
+box-select in `viewer.js`, the annotation tray, and the `get_annotations` /
+`resolve_annotations` / `patch_operations` tools.
+
+**Phase 4 — export polish. ⬜ Not started.** Direct write to `.minecraft/schematics/`,
+material list, format picker, import instructions per format.
 
 **Stage 2 (later).** §11.
 
@@ -499,7 +648,12 @@ picker, import instructions per format.
 |---|---|
 | Stage 1 local via channels, hosting later | Deletes the entire agent layer, API cost, auth, and texture-licensing problem. Validates the two open product questions first. |
 | One Python process, not Bun + Python | Verified the Python SDK can declare the capability and emit the notification. Avoids splitting state across processes and duplicating the geometry model. |
-| Channel code isolated in `channel.py` | It's the only research-preview surface. Everything else must survive a contract change. |
+| Channel code isolated in `web/channel.py` | It's the only research-preview surface. Everything else must survive a contract change. |
+| **Two delivery paths, not one** | Channels are gated by org policy and unavailable on Bedrock/Vertex/Foundry — on the account this was built on, they are simply off. `await_prompt` is subject to no gate because it is an ordinary tool call. Channels are better when available (the session stays free); polling always works. Neither subsumes the other. |
+| **Green means proven, never merely plausible** | Channel events are unacknowledged, so an attached session is not evidence of delivery. Painting it green reported a healthy link through a whole session in which nothing arrived. Amber for "unproven" is the only honest option, and it costs nothing because the prompt is queued anyway. |
+| **A reply is what confirms the channel** | The one signal that travels back. Guarded so it only counts after an event was actually pushed — Claude calls `reply` from ordinary terminal turns and from the `await_prompt` loop, neither of which involves a channel — and latched, since a transport going away is not evidence the channel never worked. |
+| **Queue as well as push, until confirmed** | A push that cannot be verified must not be the sole delivery path. Skipping the queue on an unverifiable push destroyed prompts outright. One duplicate on the first exchange of a proven channel is a far cheaper failure than losing every prompt. |
+| `.mcp.json` gitignored, `.example` committed | Its `command` is an absolute path to one machine's interpreter. Committing it breaks every other machine, and the symptom is a server that silently never connects. |
 | Keep the existing MCP tools working | A channel break degrades to the current product instead of bricking it. |
 | Operations JSON as source of truth | Schematics are compiled output; editing JSON is what makes revision cheap and diffable. |
 | Own three.js renderer | No asset-licensing problem, no thin dependency in the critical path. |
