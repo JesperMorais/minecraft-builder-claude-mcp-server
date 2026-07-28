@@ -6,6 +6,37 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **`render_structure`: Claude can see its own builds.** Every other feedback
+  path in this server describes a build in words — ASCII slices, block counts, a
+  style verdict. This one photographs it. A headless Chromium loads the real
+  viewer with `?render=1`, the tool aims the camera at four isometric corners and
+  one level elevation, and the PNGs come back as MCP image content, so the model
+  reviews what it actually made rather than what it meant to emit.
+
+  It drives the existing viewer rather than shipping a renderer of its own: a
+  second renderer would be a second thing to keep in step with `viewer.js`, and
+  every disagreement between them would be invisible — the model would be
+  reviewing a picture the user never sees. The structure reaches the page by
+  intercepting its `/api/structure` fetch instead of going through
+  `ViewerState`, so taking a picture cannot bump the version, replace what the
+  user is looking at, or repoint a note they have not applied yet.
+
+  Angles are compass bearings for where the camera stands, matching Minecraft's
+  own compass (0 = north = -Z, 90 = east = +X), and the framing maths lives in
+  Python so it can be tested without a browser. `count` takes a prefix of the
+  standard set — ordered so one image is the corner the viewer opens at, two add
+  the elevation, three show the back — or pass explicit `angles`. With no
+  structure argument it renders whatever `show_structure` last displayed.
+
+  Playwright is an optional extra (`pip install ".[render]"`), because it brings
+  a browser with it. Missing library, missing browser and an unreachable CDN each
+  come back as one sentence naming the command that fixes it; nothing else in the
+  server is affected by its absence.
+
+  Render mode also stops the viewer's animation loop and turns on
+  `preserveDrawingBuffer`. Chromium software-rasterises every frame here, so an
+  idle loop leaves each screenshot queueing behind it for the one thread doing
+  the work — dropping it took a five-view render from 45 seconds to 7.
 - **The annotation loop (Phase 3).** Mark up a build in the viewer and have
   Claude act on it. Tick *Mark up the build*, click a block or Shift-click two
   blocks to box a region, and attach a note; notes collect in a tray with an
