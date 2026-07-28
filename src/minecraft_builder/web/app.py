@@ -87,17 +87,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/status":
-            # Drives the page's diagnostics. "waiting" is the strongest signal —
-            # an await_prompt call is blocked right now, so delivery is certain.
-            # "attached" only means an MCP session exists; with channels blocked
-            # by org policy its pushes are silently dropped, so it is a weaker
-            # claim than it looks.
             self._send_json({
-                "attached": BRIDGE.attached,
-                "waiting": PROMPTS.listening,
-                "polling": PROMPTS.active(),
-                "queued": PROMPTS.pending,
-                "events_sent": BRIDGE.sent,
+                **_link_status(),
                 "viewers": CHAT.bus.subscriber_count,
                 "version": STATE.version,
             })
@@ -146,27 +137,55 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         # Push first, then record, so the transcript entry carries the real
-        # delivery outcome rather than an optimistic guess. A prompt the channel
-        # accepted is NOT queued as well — that would deliver it twice to a
-        # session using both mechanisms.
+        # delivery outcome rather than an optimistic guess.
+        #
+        # A successful push is NOT proof Claude received anything. push() only
+        # reports that the frame reached the transport, and the bridge is attached
+        # for every stdio session whether or not the channel is enabled — so a
+        # session with channels blocked by org policy discards the notification in
+        # silence and push() still returns True. Trusting it and skipping the
+        # queue meant every browser prompt was destroyed in exactly that setup,
+        # with an await_prompt loop blocked and waiting a few metres away, while
+        # this endpoint reported delivered=True.
+        #
+        # So the prompt is queued as well until the channel has proven itself this
+        # session. Once BRIDGE.confirmed is latched the push is trustworthy on its
+        # own, and queueing a copy would deliver the same prompt twice.
         pushed = BRIDGE.push(text, {"chat_id": "web", "sender": "viewer"})
-        delivered = pushed or PROMPTS.active()
+        channel_proven = pushed and BRIDGE.confirmed
+        delivered = channel_proven or PROMPTS.active()
         message = CHAT.from_user(text, delivered=delivered)
-        if not pushed:
-            PROMPTS.put({"id": message["id"], "text": text})
+        if not channel_proven:
+            PROMPTS.put({"id": message["id"], "text": text, "pushed": pushed})
         if not delivered:
-            # The flag ends the message with no trailing punctuation on purpose:
+            # Both notes end on the flag with no trailing punctuation on purpose:
             # this line gets copy-pasted, and a sentence period lands inside the
             # server name, which Claude Code reports as "no MCP server configured
             # with that name" — a confusing second failure on top of the first.
-            CHAT.note(
-                "That prompt was queued, but nothing is collecting prompts right "
-                "now. Either ask Claude in the terminal to listen with its "
-                "await_prompt tool (works everywhere, no flag needed), or restart "
-                "Claude Code from the project root with this flag:\n"
-                "--dangerously-load-development-channels server:minecraft-builder"
-            )
-        self._send_json({"delivered": delivered, "message": message})
+            if pushed:
+                # An event did go out; whether Claude sees it is undetectable
+                # until one comes back answered. Say that, rather than implying
+                # either success or failure.
+                CHAT.note(
+                    "Sent to the Claude session, but nothing has confirmed it yet "
+                    "— channel events are not acknowledged, so a session with "
+                    "channels disabled or blocked by org policy looks identical "
+                    "from here. The prompt is also queued, so if no answer "
+                    "arrives you can ask Claude in the terminal to listen with "
+                    "its await_prompt tool and it will be picked up. To use "
+                    "channels instead, restart Claude Code from the project root "
+                    "with this flag:\n"
+                    "--dangerously-load-development-channels server:minecraft-builder"
+                )
+            else:
+                CHAT.note(
+                    "That prompt was queued, but nothing is collecting prompts "
+                    "right now. Either ask Claude in the terminal to listen with "
+                    "its await_prompt tool (works everywhere, no flag needed), or "
+                    "restart Claude Code from the project root with this flag:\n"
+                    "--dangerously-load-development-channels server:minecraft-builder"
+                )
+        self._send_json({"delivered": delivered, "message": message, **_link_status()})
 
     def _stream_events(self) -> None:
         """Hold an SSE connection open, replaying history then streaming events."""
@@ -219,6 +238,40 @@ class _Handler(BaseHTTPRequestHandler):
         """
 
 
+def _link_status() -> dict:
+    """Whether a prompt typed in the browser actually reaches Claude.
+
+    One function because three responses answer this question — ``/api/status``,
+    the SSE snapshot, and the reply to ``POST /api/prompt`` — and a page that got
+    a different answer depending on which one it read would be worse than a page
+    with no indicator at all.
+
+    The three keys that mean "yes, it gets collected", in descending strength:
+
+    - ``waiting`` — an ``await_prompt`` call is blocked on the queue right now.
+      A prompt enqueued this instant reaches Claude in milliseconds.
+    - ``polling`` — nobody is blocked, but a take happened within the grace
+      window, so a polling loop is between rounds and will be back.
+    - ``confirmed`` — a channel event we pushed came back answered, which is the
+      only positive proof the channel round trip closes.
+
+    ``attached`` is **not** one of them. It says an MCP session exists over
+    stdio, with or without the channel enabled; when org policy blocks channels
+    its pushes are discarded in silence. Treating it as proof is what let the
+    status dot show green through an entire debugging session in which nothing
+    was delivered.
+    """
+    channel = BRIDGE.status()
+    return {
+        "attached": channel["attached"],
+        "confirmed": channel["confirmed"],
+        "events_sent": channel["events_sent"],
+        "waiting": PROMPTS.listening,
+        "polling": PROMPTS.active(),
+        "queued": PROMPTS.pending,
+    }
+
+
 def _sse_snapshot() -> str:
     """First frame on a new connection: enough to render without a second fetch."""
     return (
@@ -227,9 +280,7 @@ def _sse_snapshot() -> str:
             "type": "snapshot",
             "messages": CHAT.history(),
             "version": STATE.version,
-            "attached": BRIDGE.attached,
-            "waiting": PROMPTS.listening,
-            "polling": PROMPTS.active(),
+            **_link_status(),
         })
         + "\n\n"
     )

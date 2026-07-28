@@ -96,6 +96,25 @@ class PromptQueue:
         with self._cond:
             return len(self._items)
 
+    def drop_pushed(self) -> int:
+        """Discard queued prompts that also went out over the channel.
+
+        Those copies are insurance: a channel push cannot be distinguished from
+        a channel push that was silently dropped, so the HTTP layer queues the
+        prompt as well. Once the channel proves itself the insurance has to be
+        cancelled, or a later ``await_prompt`` replays a prompt Claude already
+        answered and the build gets made twice.
+
+        Only prompts marked ``pushed`` are dropped. One queued while no session
+        was attached was never sent anywhere and is still waiting to be
+        collected. Returns how many were discarded.
+        """
+        with self._cond:
+            kept = deque(item for item in self._items if not item.get("pushed"))
+            dropped = len(self._items) - len(kept)
+            self._items = kept
+            return dropped
+
     def clear(self) -> None:
         """Drop queued prompts and waiter history. Mainly for tests."""
         with self._cond:

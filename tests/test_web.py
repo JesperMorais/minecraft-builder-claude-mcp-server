@@ -482,6 +482,141 @@ def test_status_reports_no_attached_session(viewer):
     status = json.loads(body)
     assert status["attached"] is False
     assert status["events_sent"] == 0
+    assert status["confirmed"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Prompts with a session attached
+#
+# Every test above runs with the bridge detached, which is why a bug that only
+# appears once it is attached went unnoticed: push() succeeds for any stdio
+# session, so the queue fallback was never reached in a real one.
+# --------------------------------------------------------------------------- #
+
+class _DiscardingStream:
+    """A client that accepts frames and drops them.
+
+    This is precisely what Claude Code looks like when channels are blocked by
+    org policy or were not enabled at startup: the notification is written to the
+    transport successfully and then discarded in silence.
+    """
+
+    def __init__(self):
+        self.frames = []
+
+    async def send(self, message):
+        self.frames.append(message)
+
+
+@pytest.fixture
+def attached_bridge(monkeypatch):
+    """A bridge attached to a live loop on its own thread, as a real session has.
+
+    A fresh ChannelBridge rather than the process-wide one: ``confirmed`` latches
+    for the life of a session by design, so a test that proves the channel would
+    leak that into every test after it. Patched into ``app`` because that module
+    bound the name at import time.
+
+    Yields ``(bridge, stream)``.
+    """
+    import asyncio
+
+    from minecraft_builder.web.channel import ChannelBridge
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    bridge = ChannelBridge()
+    stream = _DiscardingStream()
+    bridge.attach(loop, stream)
+    monkeypatch.setattr("minecraft_builder.web.app.BRIDGE", bridge)
+    yield bridge, stream
+    bridge.detach()
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)
+
+
+def test_prompt_is_queued_even_when_the_channel_accepts_it(viewer, attached_bridge):
+    """Regression: an unproven channel must not be the only delivery path.
+
+    push() returning True says the frame reached the transport, not that Claude
+    received it. Treating it as delivery meant a policy-blocked session swallowed
+    every browser prompt — it was never queued, so await_prompt could not collect
+    it either — while this endpoint reported delivered=True.
+    """
+    bridge, stream = attached_bridge
+    assert bridge.attached is True
+    assert bridge.confirmed is False
+
+    _status, body = _post(viewer, "/api/prompt", {"text": "build a hut"})
+
+    assert len(stream.frames) == 1  # the channel event went out
+    assert PROMPTS.pending == 1     # and it is collectable regardless
+    assert body["confirmed"] is False
+    # Nothing has proven itself, so the page must not be told this was delivered.
+    assert body["delivered"] is False
+
+
+def test_await_prompt_still_receives_prompts_while_a_session_is_attached(
+    viewer, attached_bridge
+):
+    # The end-to-end version of the bug: a listening await_prompt loop got
+    # nothing, because the prompt went only to a channel that dropped it.
+    taken = {}
+
+    def waiter():
+        taken["prompt"] = PROMPTS.take(timeout=5)
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    _wait_for(lambda: PROMPTS.listening)
+
+    _status, body = _post(viewer, "/api/prompt", {"text": "build a hut"})
+    thread.join(timeout=5)
+
+    assert taken["prompt"] is not None
+    assert taken["prompt"]["text"] == "build a hut"
+    # A blocked waiter is proof of collection, so this one really was delivered.
+    assert body["delivered"] is True
+
+
+def test_a_proven_channel_becomes_the_only_delivery_path(viewer, attached_bridge):
+    # Once a reply has come back the push is trustworthy, and queueing a copy
+    # would hand Claude the same prompt twice.
+    bridge, _stream = attached_bridge
+    _post(viewer, "/api/prompt", {"text": "first"})
+    assert bridge.confirm() is True  # what the reply tool does
+    PROMPTS.clear()
+
+    _status, body = _post(viewer, "/api/prompt", {"text": "second"})
+    assert PROMPTS.pending == 0
+    assert body["delivered"] is True
+    assert body["confirmed"] is True
+
+
+def test_an_unproven_push_says_so_instead_of_claiming_either_outcome(
+    viewer, attached_bridge
+):
+    _post(viewer, "/api/prompt", {"text": "build a hut"})
+    note = CHAT.history()[-1]
+    assert note["role"] == "system"
+    # It must not read as failure — an event did go out — nor as success.
+    assert "nothing has confirmed it" in note["text"]
+    assert "await_prompt" in note["text"]
+    # Same copy-paste trap as the other note: no period after the flag.
+    assert note["text"].rstrip().endswith("server:minecraft-builder")
+
+
+def test_confirming_the_channel_drops_the_queued_insurance_copies():
+    from minecraft_builder.web.prompts import PromptQueue
+
+    q = PromptQueue()
+    q.put({"id": 1, "text": "went out over the channel", "pushed": True})
+    q.put({"id": 2, "text": "queued while detached", "pushed": False})
+    assert q.drop_pushed() == 1
+    # The unpushed one was never sent anywhere and is still owed a collection.
+    assert q.pending == 1
+    assert q.take(timeout=0)["id"] == 2
 
 
 def test_status_counts_connected_viewers(viewer):

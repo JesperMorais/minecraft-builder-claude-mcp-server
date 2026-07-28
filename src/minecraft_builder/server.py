@@ -466,6 +466,17 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         if not text:
             return [TextContent(type="text", text="❌ Error: reply text is empty.")]
         viewer_chat.from_claude(text)
+        # A reply is the one thing that proves the channel round trip closes.
+        # Outbound events are unacknowledged, so nothing else can tell a delivered
+        # push from one a policy-blocked client dropped. confirm() ignores this
+        # unless an event was actually pushed first — Claude also calls reply from
+        # ordinary terminal turns and from the await_prompt loop, neither of which
+        # says anything about the channel.
+        if channel_bridge.confirm():
+            # Now that the channel is trusted, cancel the queued copies the HTTP
+            # layer kept as insurance, so a later await_prompt does not hand back
+            # a prompt that has just been answered.
+            viewer_prompts.drop_pushed()
         if not viewer_chat.bus.subscriber_count:
             # Worth saying: the reply is recorded and will show up when the page
             # connects, but right now nobody is reading it.

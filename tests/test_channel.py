@@ -82,6 +82,72 @@ def test_detach_releases_the_session():
 
 
 # --------------------------------------------------------------------------- #
+# Proof of delivery
+# --------------------------------------------------------------------------- #
+
+def test_confirm_is_ignored_before_anything_has_been_pushed():
+    # Claude calls reply from ordinary terminal turns and from the await_prompt
+    # loop. Neither involves a channel event, so neither is evidence the channel
+    # works, and latching on one would put the status dot straight back to
+    # claiming a link it cannot see.
+    bridge = ChannelBridge()
+    assert bridge.confirm() is False
+    assert bridge.confirmed is False
+
+
+def test_confirm_counts_once_an_event_has_gone_out():
+    async def scenario():
+        async with create_client_server_memory_streams() as (_client, server):
+            _server_read, server_write = server
+            bridge = ChannelBridge()
+            bridge.attach(asyncio.get_running_loop(), server_write)
+            with anyio.fail_after(TIMEOUT):
+                assert await asyncio.to_thread(bridge.push, "build a hut") is True
+            assert bridge.confirmed is False  # pushed, but nothing answered yet
+            assert bridge.confirm() is True
+            assert bridge.confirmed is True
+
+    asyncio.run(scenario())
+
+
+def test_confirmation_survives_a_detach():
+    # Latched on purpose: the channel either works in this session or it does
+    # not, and a transport that goes away is not evidence it never worked.
+    async def scenario():
+        async with create_client_server_memory_streams() as (_client, server):
+            _server_read, server_write = server
+            bridge = ChannelBridge()
+            bridge.attach(asyncio.get_running_loop(), server_write)
+            with anyio.fail_after(TIMEOUT):
+                await asyncio.to_thread(bridge.push, "build a hut")
+            bridge.confirm()
+            bridge.detach()
+            assert bridge.attached is False
+            assert bridge.confirmed is True
+
+    asyncio.run(scenario())
+
+
+def test_status_is_one_untorn_snapshot():
+    bridge = ChannelBridge()
+    assert bridge.status() == {"attached": False, "events_sent": 0, "confirmed": False}
+    bridge.attach(asyncio.new_event_loop(), object())
+    # confirmed cannot be true while events_sent is zero; the guard in confirm()
+    # is what makes that combination unrepresentable.
+    status = bridge.status()
+    assert status == {"attached": True, "events_sent": 0, "confirmed": False}
+
+
+def test_attached_alone_is_not_proof_of_delivery():
+    # The distinction the whole status indicator rests on: attach() succeeds for
+    # any stdio session, with or without the channel enabled.
+    bridge = ChannelBridge()
+    bridge.attach(asyncio.new_event_loop(), object())
+    assert bridge.attached is True
+    assert bridge.confirmed is False
+
+
+# --------------------------------------------------------------------------- #
 # Bridge, across the thread boundary
 # --------------------------------------------------------------------------- #
 

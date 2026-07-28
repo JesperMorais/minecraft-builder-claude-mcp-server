@@ -97,6 +97,10 @@ class ChannelBridge:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._write_stream = None
         self._sent = 0
+        # Latched: once the round trip has been observed to close, a later detach
+        # does not un-prove it. The channel either works in this session or it
+        # does not, and a reconnect is not evidence to the contrary.
+        self._confirmed = False
 
     def attach(self, loop: asyncio.AbstractEventLoop, write_stream) -> None:
         """Bind to the running MCP session's event loop and write stream."""
@@ -111,6 +115,13 @@ class ChannelBridge:
 
     @property
     def attached(self) -> bool:
+        """Whether there is a session to write to.
+
+        Deliberately *not* the same as "the channel works". This is true whenever
+        the MCP server is running over stdio, with or without the channel
+        enabled, so on its own it is no evidence that anything is delivered. Use
+        ``confirmed`` for that.
+        """
         with self._lock:
             return self._loop is not None and self._write_stream is not None
 
@@ -119,6 +130,48 @@ class ChannelBridge:
         """How many events have been handed to the transport this session."""
         with self._lock:
             return self._sent
+
+    @property
+    def confirmed(self) -> bool:
+        """Whether an event we pushed has ever been answered.
+
+        The only positive proof the round trip closes. Channel notifications are
+        unacknowledged, and a session lacking the channel — or blocked by org
+        policy — discards them in silence, so nothing on the outbound side can
+        tell "delivered" from "dropped". A reply coming back can.
+        """
+        with self._lock:
+            return self._confirmed
+
+    def confirm(self) -> bool:
+        """Record that Claude answered an event we pushed.
+
+        Returns whether this counted. A reply arriving before we have pushed
+        anything proves nothing about the channel — Claude can call the ``reply``
+        tool during an ordinary terminal turn, or while driving the viewer over
+        ``await_prompt``, neither of which involves a channel event — so it is
+        ignored rather than latched.
+        """
+        with self._lock:
+            if self._sent == 0:
+                return False
+            self._confirmed = True
+            return True
+
+    def status(self) -> Dict[str, object]:
+        """The channel's state as one snapshot, taken under a single lock.
+
+        Read together so a caller cannot see a torn combination — ``confirmed``
+        true while ``events_sent`` still reads zero — and draw a state that never
+        happened.
+        """
+        with self._lock:
+            attached = self._loop is not None and self._write_stream is not None
+            return {
+                "attached": attached,
+                "events_sent": self._sent,
+                "confirmed": self._confirmed,
+            }
 
     @staticmethod
     async def _send(stream: Any, frame: JSONRPCNotification) -> None:
