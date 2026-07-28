@@ -452,8 +452,8 @@ def test_events_stream_opens_with_a_snapshot(viewer):
         _wait_for(lambda: len(frames) >= 1)
         snapshot = frames[0]
         assert snapshot["type"] == "snapshot"
-        # Version numbering is process-global and never restarts, so compare
-        # against the store rather than hard-coding a number.
+        # Compared against the store rather than hard-coded: version numbering
+        # is process-global, and only the fixture's clear() puts it back to 1.
         assert snapshot["version"] == web.STATE.version
         # History is replayed so a page opened late is not blank.
         assert [m["text"] for m in snapshot["messages"]] == ["earlier message"]

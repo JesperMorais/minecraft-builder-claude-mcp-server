@@ -19,12 +19,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import Optional, Tuple
 
+from .annotations import ANNOTATIONS
 from .channel import BRIDGE
 from .chat import CHAT
 from .prompts import PROMPTS
 from .state import STATE
 
 HOST = "127.0.0.1"
+
+# The prompt the "Apply notes" button sends. Deliberately routed through the
+# ordinary prompt path rather than a new mechanism: it has to reach Claude the
+# same way a typed message does, over whichever of the two paths is working.
+APPLY_NOTES_PROMPT = (
+    "I have left notes on the build in the viewer. Call get_annotations to read "
+    "them, then patch_operations to apply them, then show_structure so I can see "
+    "the result."
+)
 
 # A prompt is a sentence, not a payload. Cap it so a stray POST cannot make the
 # server allocate without bound.
@@ -89,8 +99,16 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/status":
             self._send_json({
                 **_link_status(),
+                **_annotation_counts(),
                 "viewers": CHAT.bus.subscriber_count,
                 "version": STATE.version,
+            })
+            return
+
+        if path == "/api/annotations":
+            self._send_json({
+                "annotations": [a.model_dump() for a in ANNOTATIONS.all()],
+                **_annotation_counts(),
             })
             return
 
@@ -112,30 +130,138 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_bytes(body, content_type)
 
     def do_POST(self) -> None:  # noqa: N802 - name fixed by BaseHTTPRequestHandler
-        if self.path.split("?", 1)[0] != "/api/prompt":
+        path = self.path.split("?", 1)[0]
+        handler = {
+            "/api/prompt": self._post_prompt,
+            "/api/annotations": self._post_annotation,
+            "/api/annotations/resolve": self._post_resolve_annotations,
+            "/api/apply-notes": self._post_apply_notes,
+        }.get(path)
+        if handler is None:
             self.send_error(404, "Not found")
             return
 
+        body = self._read_json_body()
+        if body is None:
+            return  # _read_json_body already sent the error
+        handler(body)
+
+    def do_DELETE(self) -> None:  # noqa: N802 - name fixed by BaseHTTPRequestHandler
+        path = self.path.split("?", 1)[0]
+        prefix = "/api/annotations/"
+        if not path.startswith(prefix):
+            self.send_error(404, "Not found")
+            return
+        try:
+            annotation_id = int(path[len(prefix):])
+        except ValueError:
+            self.send_error(400, "Annotation id must be an integer")
+            return
+        if not ANNOTATIONS.remove(annotation_id):
+            self.send_error(404, f"No annotation {annotation_id}")
+            return
+        self._send_json({"removed": annotation_id, **_annotation_counts()})
+
+    def _read_json_body(self) -> Optional[dict]:
+        """Read and parse a JSON request body, or send an error and return None."""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             self.send_error(400, "Bad Content-Length")
-            return
+            return None
         if length > MAX_PROMPT_BYTES:
-            self.send_error(413, "Prompt too large")
+            self.send_error(413, "Body too large")
+            return None
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_error(400, "Body must be JSON")
+            return None
+        if not isinstance(body, dict):
+            self.send_error(400, "Body must be a JSON object")
+            return None
+        return body
+
+    # ----------------------------------------------------------------------- #
+    # Annotations
+    # ----------------------------------------------------------------------- #
+
+    def _post_annotation(self, body: dict) -> None:
+        """Create one annotation, resolved against the version it was drawn on."""
+        # Default to the current version rather than rejecting a missing one: the
+        # page always knows what it is displaying, but a curl-driven test should
+        # not have to.
+        version = body.get("structure_version")
+        version = STATE.version if version is None else int(version)
+        structure = STATE.get(version)
+        if structure is None:
+            # Either nothing is loaded, or the marked version has aged out of
+            # history and its provenance is gone. Say which.
+            self.send_error(
+                409,
+                f"Version {version} is no longer available to resolve against"
+                if STATE.version else "No structure is loaded yet",
+            )
             return
 
         try:
-            body = json.loads(self.rfile.read(length) or b"{}")
-            text = str(body.get("text", "")).strip()
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            self.send_error(400, "Body must be JSON")
+            annotation = ANNOTATIONS.add(
+                structure,
+                structure_version=version,
+                kind=str(body.get("kind", "point")),
+                note=str(body.get("note", "")),
+                pos=body.get("pos"),
+                start=body.get("start"),
+                end=body.get("end"),
+                op_index=body.get("op_index"),
+            )
+        except (ValueError, TypeError, IndexError) as error:
+            self.send_error(400, str(error))
             return
 
+        self._send_json({
+            "annotation": annotation.model_dump(),
+            **_annotation_counts(),
+        })
+
+    def _post_resolve_annotations(self, body: dict) -> None:
+        """Mark annotations resolved. No ids means all open ones."""
+        ids = body.get("ids")
+        try:
+            wanted = None if ids is None else [int(i) for i in ids]
+        except (TypeError, ValueError):
+            self.send_error(400, "ids must be a list of integers")
+            return
+        self._send_json({"resolved": ANNOTATIONS.resolve(wanted), **_annotation_counts()})
+
+    def _post_apply_notes(self, _body: dict) -> None:
+        """Ask Claude to read and apply the open notes.
+
+        Sends a canned prompt down the ordinary prompt path so it travels over
+        whichever mechanism is working, exactly as a typed message would.
+        """
+        open_count, _total = ANNOTATIONS.counts()
+        if not open_count:
+            self.send_error(400, "There are no open notes to apply")
+            return
+        self._send_json({
+            **self._deliver_prompt(APPLY_NOTES_PROMPT),
+            "notes": open_count,
+        })
+
+    # ----------------------------------------------------------------------- #
+    # Prompts
+    # ----------------------------------------------------------------------- #
+
+    def _post_prompt(self, body: dict) -> None:
+        text = str(body.get("text", "")).strip()
         if not text:
             self.send_error(400, "Empty prompt")
             return
+        self._send_json(self._deliver_prompt(text))
 
+    def _deliver_prompt(self, text: str) -> dict:
+        """Get one prompt to Claude, and report honestly how it went."""
         # Push first, then record, so the transcript entry carries the real
         # delivery outcome rather than an optimistic guess.
         #
@@ -185,7 +311,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "restart Claude Code from the project root with this flag:\n"
                     "--dangerously-load-development-channels server:minecraft-builder"
                 )
-        self._send_json({"delivered": delivered, "message": message, **_link_status()})
+        return {"delivered": delivered, "message": message, **_link_status()}
 
     def _stream_events(self) -> None:
         """Hold an SSE connection open, replaying history then streaming events."""
@@ -236,6 +362,12 @@ class _Handler(BaseHTTPRequestHandler):
         stderr is the MCP server's log channel and ends up in Claude Code's
         debug file, so request spam there is actively unhelpful.
         """
+
+
+def _annotation_counts() -> dict:
+    """Open/total note counts, so the page can badge the tray without a fetch."""
+    open_count, total = ANNOTATIONS.counts()
+    return {"notes_open": open_count, "notes_total": total}
 
 
 def _link_status() -> dict:

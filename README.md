@@ -20,6 +20,9 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
   your Claude Code session, with replies coming back in the same window. Works
   via plain polling (no flags, no org permission) or via channels (see
   [Chatting from the viewer](#chatting-from-the-viewer))
+- **Point at what's wrong** — click a block or box a region in the viewer, attach
+  a note, and Claude edits the *operation* that built it rather than regenerating
+  the whole structure (see [Marking up a build](#marking-up-a-build))
 - WorldEdit-compatible `.schem` and Litematica-native `.litematic` output, so a
   build can be pasted instantly *or* built by hand in survival against a
   hologram (see [Importing into Minecraft](#importing-into-minecraft))
@@ -170,6 +173,20 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
   pending prompt; Claude calls it in a loop to keep listening
 - This is the chat path that needs **no flag and no org permission** — see
   [Chatting from the viewer](#chatting-from-the-viewer)
+
+**get_annotations** - Reads the notes you marked on the build in the viewer
+- Each note names the **operation index** that placed what you clicked, resolved
+  against the version you were looking at — so Claude edits the roof, not a guess
+- See [Marking up a build](#marking-up-a-build)
+
+**patch_operations** - Edits individual operations of the build on screen
+- `replace` / `insert` / `delete` by index; every index in one call refers to the
+  structure *before* any of them apply, so a batch cannot shift its own targets
+- Re-shows the build itself, so no follow-up `show_structure` is needed
+- "Make the roof steeper" costs one edit instead of a 200-operation rewrite
+
+**resolve_annotations** - Marks notes as dealt with, clearing the viewer's tray
+- Omit `ids` to close everything open, or pass ids to close only what was handled
 
 **open_output_folder** - Opens the output location in the OS file manager
 - Works on Windows (Explorer), macOS (Finder), and Linux (xdg-open)
@@ -399,6 +416,35 @@ and it arrives. Once a reply has come back over the channel the dot goes green
 and stays green for the session. Queued prompts hold up to 64, oldest dropped
 first.
 
+### Marking up a build
+
+Describing what's wrong with a build in words is the slow way. Tick **Mark up the
+build** in the panel and point at it instead:
+
+- **Click a block** to mark that block.
+- **Shift-click two blocks** to mark the box between them.
+- Type what's wrong, press **Add note**. Repeat as many times as you like.
+- Press **Apply notes**, and Claude reads them and revises the build.
+- <kbd>Esc</kbd> cancels a half-made selection. **×** deletes a note.
+
+Marking mode shares the left mouse button with orbiting: dragging still rotates
+the view, and only a click that barely moves counts as a mark.
+
+**Why this beats typing "the roof is too steep":** a note records which
+*operation* built what you clicked, not just a coordinate. Claude receives
+*"operation #4 (pyramid centre=[8,5,8] base=6): too steep"* and edits that one
+operation. Ask in prose and it usually regenerates the whole structure, quietly
+changing the parts you were happy with.
+
+A region resolves to the operation that owns most of it — a box drawn round a
+roof always clips a wall — and Claude is told the coverage share and what else the
+box touched, so it can tell "mostly the roof" from a genuine 50/50.
+
+Notes are resolved **when you make them**, against the version on screen. If the
+build is revised before Claude reads them, they still point at what you marked,
+and Claude is warned that the index may have moved. Notes live in memory for the
+session; they are not saved to disk.
+
 ## JSON Structure Format
 
 A structure is defined by a `name` plus any mix of **`operations`** (declarative
@@ -482,9 +528,10 @@ minecraft-builder-claude-mcp-server/
 │   ├── shapes.py            # Pure geometry generators
 │   ├── converter.py         # JSON to .schem / .litematic converters
 │   ├── versions.py          # Version support + block-ID validation
-│   ├── preview.py           # ASCII preview + stats
 │   ├── colors.py            # Flat display colours for the 3D viewer
 │   ├── style.py             # Style guide loader + compact checklist
+│   ├── lint.py              # Style guide as programmatic checks
+│   ├── patches.py           # Targeted edits to a structure's operations
 │   ├── preview.py           # ASCII preview + structure stats
 │   ├── paths.py             # Path resolution and file-manager opening
 │   ├── web/                 # Local 3D viewer + chat
@@ -493,6 +540,7 @@ minecraft-builder-claude-mcp-server/
 │   │   ├── payload.py       # Compact JSON for the browser
 │   │   ├── channel.py       # Pushes browser prompts into the session
 │   │   ├── prompts.py       # Prompt queue for polling mode (await_prompt)
+│   │   ├── annotations.py   # Build markup, resolved to operations
 │   │   ├── chat.py          # Transcript + SSE event bus
 │   │   ├── __main__.py      # Run the viewer standalone
 │   │   └── static/          # index.html, viewer.js, style.css

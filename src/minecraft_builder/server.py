@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from .converter import DEFAULT_FORMATS, OUTPUT_FORMATS, SchematicConverter
 from .lint import format_report, lint_structure
+from .patches import PatchError, apply_patches
 from .paths import (
     open_in_file_manager,
     resolve_input_path,
@@ -29,6 +30,7 @@ from .versions import (
 )
 from .web import STATE as viewer_state
 from .web import ensure_running as start_viewer
+from .web.annotations import ANNOTATIONS as viewer_annotations
 from .web.channel import BRIDGE as channel_bridge
 from .web.chat import CHAT as viewer_chat
 from .web.prompts import PROMPTS as viewer_prompts
@@ -62,6 +64,20 @@ await_prompt to wait for their next message, handle it exactly as above
 (show_structure, then reply), and call await_prompt again. Keep the loop going
 — a timeout round just means the user is thinking; only stop when they tell you
 to in the terminal.
+
+The viewer also lets the user mark up a build: click a block, drag a box, or
+select an operation, and attach a note. When they ask you to apply their notes:
+
+1. Call get_annotations. Every note names the operation index that placed what
+   they clicked, resolved against the version they were looking at.
+2. Call patch_operations on those indices. Edit the operation they complained
+   about; do NOT regenerate the whole structure, because that quietly changes
+   the parts they were happy with. All indices in one call refer to the
+   structure as it is before any of them apply.
+3. patch_operations shows the result itself, so do not follow it with
+   show_structure.
+4. Call resolve_annotations to close the notes you handled, then reply saying
+   what you changed. Leave a note open if you did not address it, and say so.
 """
 
 # Initialize MCP server
@@ -78,6 +94,12 @@ MIN_AWAIT_SECONDS = 5.0
 def _log(message: str) -> None:
     """Log to stderr — stdout is reserved for the MCP stdio transport."""
     print(message, file=sys.stderr)
+
+
+def _structure_name() -> str:
+    """Name of whatever the viewer is showing, for messages about it."""
+    structure = viewer_state.current()
+    return structure.name if structure is not None else "the build"
 
 
 def _load_structure(arguments: Any) -> MinecraftStructure:
@@ -377,6 +399,100 @@ viewer if it is not already running.""",
             }
         ),
         Tool(
+            name="get_annotations",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmYzE1NyIgZD0iTTQgM2gxNGwyIDJ2MTZsLTQtMy00IDMtNC0zLTQgM3oiLz48L3N2Zz4=", mimeType="image/svg+xml")],
+            description="""Reads the notes the user has attached to the build in the viewer.
+
+Call this when the user says something like "apply my notes", "I've marked some
+things", or when a prompt arrives asking you to act on annotations.
+
+Each note names the **operation index** it refers to, resolved server-side from
+the coordinate the user clicked against the version they were looking at. That is
+the point: prefer editing that one operation with patch_operations over
+regenerating the whole structure, which throws away the parts they liked.
+
+Notes stay open until you call resolve_annotations, so finish the edit first.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "include_resolved": {
+                        "type": "boolean",
+                        "description": "Also list notes already dealt with. Default false."
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="patch_operations",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmOGE2NSIgZD0iTTE0IDJsOCA4LTQgMS0xIDQtOC04IDEtNHptLTMgOWw2IDYtNyA3LTYtNnoiLz48L3N2Zz4=", mimeType="image/svg+xml")],
+            description="""Edits individual operations of the structure on screen, in place.
+
+Use this instead of re-sending a whole structure when the user wants a change to
+part of a build. "Make the roof steeper" is one replace, not a 200-operation
+rewrite — and a rewrite tends to quietly change the parts they were happy with.
+
+Indices are the same ones get_annotations reports, and the same ones the viewer's
+"colour by operation" toggle shows. **They all refer to the structure as it is
+now, before any of these patches apply**, so a batch of edits is written against
+what the user saw rather than against each other.
+
+- `replace` — swap the operation at that index
+- `insert`  — add before that index (index == count appends)
+- `delete`  — remove it
+
+Shows the result automatically, so the user sees the revision without you calling
+show_structure again.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "patches": {
+                        "type": "array",
+                        "description": "Edits to apply. All indices refer to the pre-patch structure.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "index": {
+                                    "type": "integer",
+                                    "description": "Which entry to act on, as reported by get_annotations."
+                                },
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["replace", "insert", "delete"],
+                                    "description": "What to do at that index."
+                                },
+                                "operation": {
+                                    "type": "object",
+                                    "description": "The new operation, same format as create_minecraft_structure's operations. Required for replace and insert."
+                                }
+                            },
+                            "required": ["index", "action"]
+                        }
+                    }
+                },
+                "required": ["patches"]
+            }
+        ),
+        Tool(
+            name="resolve_annotations",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzYyZGQ5NSIgZD0iTTkgMTYuMkw0LjggMTJsLTEuNCAxLjRMOSAxOSAyMSA3bC0xLjQtMS40eiIvPjwvc3ZnPg==", mimeType="image/svg+xml")],
+            description="""Marks the user's notes as dealt with, clearing them from the viewer's tray.
+
+Call this after you have actually applied the notes — it is what tells the user
+which of their objections you addressed. With no ids, every open note is closed;
+pass ids to close only some, which is the honest thing to do when you handled part
+of the batch and want to leave the rest open.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Note ids to close. Omit to close all open notes."
+                    }
+                }
+            }
+        ),
+        Tool(
             name="show_structure",
             icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iIzdmYjNmZiIgZD0iTTEyIDJsOSA1LjJ2OS42TDEyIDIyIDMgMTYuOFY3LjJMMTIgMnoiLz48cGF0aCBmaWxsPSIjNGE4MmQ2IiBkPSJNMTIgMTJsOS00Ljh2OS42TDEyIDIyeiIvPjwvc3ZnPg==", mimeType="image/svg+xml")],
             description="""Displays a structure in a 3D viewer in the user's browser.
@@ -485,6 +601,129 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 text="✓ Reply recorded, but no viewer page is currently open."
             )]
         return [TextContent(type="text", text="✓ Sent to the viewer.")]
+
+    if name == "get_annotations":
+        include_resolved = bool(arguments.get("include_resolved"))
+        notes = viewer_annotations.all() if include_resolved else viewer_annotations.open()
+        if not notes:
+            return [TextContent(
+                type="text",
+                text=(
+                    "No notes on the build. The user marks blocks or regions in the "
+                    "viewer; if they asked you to apply notes and there are none, "
+                    "say so rather than guessing what they meant."
+                ),
+            )]
+        current = viewer_state.version
+        lines = []
+        for note in notes:
+            line = note.describe()
+            if note.structure_version != current:
+                # The index still means what it meant when marked; it may not
+                # mean that now. Better to say so than to let Claude patch a
+                # stale index silently.
+                line += (
+                    f"\n     ⚠ marked on version {note.structure_version}, "
+                    f"now showing {current} — re-check this index before patching"
+                )
+            lines.append(line)
+        body = "\n".join(lines)
+        return [TextContent(
+            type="text",
+            text=(
+                f"{len(notes)} note(s) on **{_structure_name()}** "
+                f"(version {current}):\n\n{body}\n\n"
+                "Each note names the operation that placed what the user clicked. "
+                "Prefer patch_operations on that index over rebuilding the whole "
+                "structure, then call resolve_annotations to close them."
+            ),
+        )]
+
+    if name == "resolve_annotations":
+        ids = arguments.get("ids")
+        if ids is not None and not isinstance(ids, list):
+            return [TextContent(type="text", text="❌ Error: ids must be a list of integers.")]
+        try:
+            wanted = None if ids is None else [int(i) for i in ids]
+        except (TypeError, ValueError):
+            return [TextContent(type="text", text="❌ Error: ids must be integers.")]
+        closed = viewer_annotations.resolve(wanted)
+        if not closed:
+            return [TextContent(
+                type="text",
+                text="No open notes matched, so nothing changed.",
+            )]
+        remaining, _total = viewer_annotations.counts()
+        tail = f" {remaining} still open." if remaining else " The tray is now clear."
+        return [TextContent(
+            type="text",
+            text=f"✓ Closed note(s) {', '.join(str(i) for i in closed)}.{tail}",
+        )]
+
+    if name == "patch_operations":
+        patches = arguments.get("patches")
+        if not isinstance(patches, list) or not patches:
+            return [TextContent(
+                type="text",
+                text="❌ Error: patches must be a non-empty list of edits."
+            )]
+        on_screen = viewer_state.current()
+        if on_screen is None:
+            return [TextContent(
+                type="text",
+                text=(
+                    "❌ Error: nothing is on screen to patch. Call show_structure "
+                    "with a structure first."
+                ),
+            )]
+        try:
+            patched = apply_patches(on_screen, patches)
+        except PatchError as e:
+            # Deliberately not a traceback: this text is what Claude reads to
+            # correct itself, and the message already names the offending patch.
+            return [TextContent(type="text", text=f"❌ Error: {str(e)}")]
+        except StructureTooLargeError as e:
+            return [TextContent(
+                type="text",
+                text=f"❌ Error: those patches make the structure too large - {str(e)}"
+            )]
+        except ValidationError as e:
+            return [TextContent(type="text", text=f"❌ Error: invalid patched structure - {str(e)}")]
+
+        try:
+            block_map = patched.expand()
+        except StructureTooLargeError as e:
+            return [TextContent(type="text", text=f"❌ Error: structure too large - {str(e)}")]
+        if not block_map:
+            return [TextContent(
+                type="text",
+                text="❌ Error: those patches leave nothing to draw — every block would be air."
+            )]
+
+        version = viewer_state.put(patched)
+        url = start_viewer()
+        viewer_chat.announce_structure(version, patched.name)
+        size = patched.calculate_size()
+        style_report = format_report(lint_structure(patched, block_map))
+        applied = ", ".join(
+            f"{p.get('action')} #{p.get('index')}" for p in patches
+            if isinstance(p, dict)
+        )
+        return [TextContent(
+            type="text",
+            text=f"""✓ Patched **{patched.name}** and showed version {version}.
+
+🔗 {url}
+
+- Applied: {applied}
+- Now: {len(patched.blocks) + len(patched.operations)} operations, \
+{size.width}x{size.height}x{size.length} blocks
+
+📐 {style_report}
+
+The page has already updated, so do not call show_structure for this. If the
+patches came from the user's notes, close them with resolve_annotations."""
+        )]
 
     if name == "show_structure":
         try:

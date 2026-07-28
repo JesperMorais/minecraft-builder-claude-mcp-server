@@ -47,8 +47,33 @@
     <div class="row">
       <label><input type="checkbox" id="show-grid"> Ground grid</label>
     </div>
+    <div class="row">
+      <label><input type="checkbox" id="annotate-mode"> Mark up the build</label>
+    </div>
+    <p id="annotate-help" hidden>
+      Click a block to mark it. <kbd>Shift</kbd>-click two blocks to mark the box
+      between them. <kbd>Esc</kbd> cancels.
+    </p>
     <div id="legend"></div>
   </aside>
+
+  <section id="notes" aria-label="Your notes on this build" hidden>
+    <div id="notes-header">
+      <span id="notes-count"></span>
+      <button type="button" id="apply-notes">Apply notes</button>
+    </div>
+    <ol id="notes-list"></ol>
+  </section>
+
+  <form id="note-composer" hidden>
+    <p id="note-target"></p>
+    <input id="note-text" type="text" autocomplete="off"
+           placeholder="What's wrong with it?" aria-label="Note">
+    <div id="note-actions">
+      <button type="submit" id="note-save">Add note</button>
+      <button type="button" id="note-cancel">Cancel</button>
+    </div>
+  </form>
 
   <div id="status" role="status"></div>
 

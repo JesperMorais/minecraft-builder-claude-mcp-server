@@ -221,6 +221,171 @@ html, body {
 
 #send:disabled { opacity: 0.45; cursor: default; }
 
+/* --------------------------------------------------------------- notes ---- */
+
+#annotate-help {
+  margin: -2px 0 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+#annotate-help kbd {
+  font: inherit;
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* Marking mode repurposes the left button, so make that visible in the cursor
+   before the user discovers it by accidentally orbiting. */
+body.annotating #scene { cursor: crosshair; }
+
+#notes {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  width: 300px;
+  max-height: min(46vh, 400px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+
+#notes-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+#apply-notes {
+  margin-left: auto;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  color: #0d1117;
+  background: #e0b341;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#apply-notes:disabled { opacity: 0.45; cursor: default; }
+
+#notes-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding-left: 7px;
+  border-left: 2px solid #e0b341;
+}
+
+.note.resolved {
+  border-left-color: var(--muted);
+  opacity: 0.55;
+}
+
+.note .where {
+  display: block;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.note .body { overflow-wrap: anywhere; }
+
+.note .drop {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.note .drop:hover { color: #e0674f; }
+
+#note-composer {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 28px));
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+}
+
+#note-target {
+  margin: 0 0 7px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+#note-text {
+  width: 100%;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+#note-text:focus { outline: none; border-color: var(--accent); }
+
+#note-actions {
+  display: flex;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+#note-actions button {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+#note-save { color: #0d1117; background: var(--accent); }
+
+#note-cancel {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.09);
+}
+
 #status {
   position: fixed;
   bottom: 14px;
@@ -251,6 +416,11 @@ html, body {
   #prompt { background: rgba(0, 0, 0, 0.04); }
   #send { color: #fff; }
   .msg.system .body { color: #8a5a00; border-left-color: #c08a1e; }
+  #annotate-help kbd { background: rgba(0, 0, 0, 0.06); }
+  #note-text { background: rgba(0, 0, 0, 0.04); }
+  #note-save { color: #fff; }
+  #note-cancel { background: rgba(0, 0, 0, 0.07); }
+  .note { border-left-color: #c08a1e; }
 }
 
 @media (max-width: 760px) {
@@ -258,4 +428,7 @@ html, body {
   #panel { display: none; }
   #chat { width: calc(100vw - 28px); }
   #status { display: none; }
+  /* The tray would sit on top of the chat; the chat matters more. Notes are
+     still listed in the panel-free flow once the window is widened. */
+  #notes { display: none; }
 }

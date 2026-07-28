@@ -6,6 +6,29 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **The annotation loop (Phase 3).** Mark up a build in the viewer and have
+  Claude act on it. Tick *Mark up the build*, click a block or Shift-click two
+  blocks to box a region, and attach a note; notes collect in a tray with an
+  **Apply notes** button.
+
+  The point is that a note names an *operation*, not a coordinate. The server
+  resolves the click through `expand_with_provenance()` **at the moment it is
+  made**, against the version on screen — resolve later and it would silently
+  point at whatever occupies that coordinate after a revision. So Claude receives
+  *"operation #4 (pyramid centre=[8,5,8] base=6), the roof: too steep"* and can
+  edit that one operation. A region resolves to the operation owning the most
+  voxels in it (a box round a roof always clips a wall), reports its coverage
+  share and what else it touched, and breaks ties toward the later operation
+  since that is the one drawn on top.
+
+  Three new tools: `get_annotations`, `patch_operations` and
+  `resolve_annotations`. `patch_operations` does `replace`/`insert`/`delete` by
+  index, and **every index in one call refers to the pre-patch structure**, so a
+  batch of notes cannot shift each other's targets — applying them sequentially
+  would turn a delete into an off-by-one on every later patch. It re-shows the
+  build itself. Picking uses the per-instance records the renderer already keeps,
+  so a click maps back to the exact voxel rather than rounding a hit point to a
+  cell, which would be wrong for every partial block.
 - **Partial-block geometry in the 3D viewer.** Stairs, slabs, fences, walls,
   fence gates, glass panes, iron bars, doors, trapdoors, lanterns, chains,
   torches, campfires, candles, carpets, rods, pots, plates and buttons now

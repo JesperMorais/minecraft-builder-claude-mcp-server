@@ -45,6 +45,22 @@ class ViewerState:
         with self._lock:
             return self._versions[-1] if self._versions else None
 
+    def get(self, version: int) -> Optional[MinecraftStructure]:
+        """The structure that *was* ``version``, or None if it has aged out.
+
+        Annotations need this: the user marked what was on screen, and resolving
+        a coordinate against the current structure instead would silently point
+        at whatever occupies it after a revision.
+        """
+        with self._lock:
+            # Version numbers never restart, so the oldest kept version is
+            # derived from the counter rather than tracked separately.
+            oldest = self._next_version - len(self._versions)
+            offset = version - oldest
+            if 0 <= offset < len(self._versions):
+                return self._versions[offset]
+            return None
+
     @property
     def version(self) -> int:
         """Version number of the current structure; 0 when nothing is loaded."""
@@ -61,8 +77,15 @@ class ViewerState:
         return build_payload(structure, version=version)
 
     def clear(self) -> None:
+        """Drop the history and restart version numbering. Tests only.
+
+        In a real session versions only ever go up, and nothing calls this. It
+        resets the counter as well as the list because a half-reset leaves tests
+        depending on how many versions earlier tests happened to create.
+        """
         with self._lock:
             self._versions.clear()
+            self._next_version = 1
 
 
 # The process-wide instance the MCP tools write to and the HTTP server reads.

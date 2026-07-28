@@ -1,6 +1,6 @@
 # Design: Web UI for Minecraft Builder
 
-**Status:** Phases 0–2 built; Phase 3 not started (§13 has the current state)
+**Status:** Phases 0–3 built; Phase 4 not started (§13 has the current state)
 **Date:** 2026-07-27, revised 2026-07-28
 
 Two stages, deliberately ordered:
@@ -622,18 +622,31 @@ Also landed alongside, unplanned: `lint.py`, the style guide encoded as programm
 appended to every `create_minecraft_structure` and `show_structure` result so builds get
 reviewed at the moment the feedback is actionable.
 
-**Phase 3 — annotation loop. ⬜ Not started. Next.** Picking, point/region markup, tray,
-`get_annotations`, `patch_operations`, version history and rollback. The differentiating
-feature. Design in §8; the groundwork is already in place — `expand_with_provenance()` records
-which operation last wrote each coordinate, `describe_operation()` labels an index, and the
-viewer payload already carries a per-voxel operation index (the "colour by operation" toggle
-reads it). So a click can resolve to *"operation #4, the roof pyramid"* rather than a bare
-coordinate, which is the entire point of the feature.
+**Phase 3 — annotation loop. ✅ Done.** The differentiating feature, as designed in §8:
+`web/annotations.py` (model, store, resolution), `patches.py` (targeted operation edits),
+raycast picking and Shift-click box select in `viewer.js`, the tray with its **Apply notes**
+button, and the `get_annotations` / `patch_operations` / `resolve_annotations` tools.
 
-Still needed: an `Annotation` model, server-side resolution of coordinates → operation index
-at creation time (against the version on screen, not the current one), raycast picking and
-box-select in `viewer.js`, the annotation tray, and the `get_annotations` /
-`resolve_annotations` / `patch_operations` tools.
+Three decisions worth recording, all of them things the naive implementation gets wrong:
+
+- **Resolution happens at creation, not at read.** The user marked what was on screen. Resolve
+  when Claude asks and a revision in between silently repoints the note. Annotations therefore
+  capture their version and resolve immediately, and `get_annotations` warns when a note
+  predates the version now showing rather than patching a stale index in silence.
+- **Patch indices refer to the pre-patch structure.** A batch of notes is resolved against one
+  version, so a batch of patches must be too. Applying them one at a time is the obvious
+  implementation and it corrupts the batch: one delete makes every later index off by one.
+- **Picking goes through the renderer's per-instance records, not the hit point.** Rounding an
+  intersection to a cell is wrong for every partial block, whose geometry does not fill its
+  cell and whose surface can sit inside a neighbour. `instanceId` indexes straight back to the
+  voxel that produced the instance.
+
+Region resolution picks the operation owning the most voxels — a box round a roof always clips
+a wall — reports the coverage share and what else it touched, and breaks ties toward the
+*later* operation, since that is the one drawn on top and therefore the one the user clicked.
+
+Not done from §8: **version rollback**. `ViewerState` keeps the last 20 versions and can now
+fetch one by number, so the data is there; nothing exposes "the old roof was better" yet.
 
 **Phase 4 — export polish. ⬜ Not started.** Direct write to `.minecraft/schematics/`,
 material list, format picker, import instructions per format.

@@ -49,6 +49,16 @@ const promptEl = document.getElementById('prompt');
 const sendEl = document.getElementById('send');
 const linkDotEl = document.getElementById('link-dot');
 const linkLabelEl = document.getElementById('link-label');
+const annotateModeEl = document.getElementById('annotate-mode');
+const annotateHelpEl = document.getElementById('annotate-help');
+const notesEl = document.getElementById('notes');
+const notesListEl = document.getElementById('notes-list');
+const notesCountEl = document.getElementById('notes-count');
+const applyNotesEl = document.getElementById('apply-notes');
+const noteComposerEl = document.getElementById('note-composer');
+const noteTargetEl = document.getElementById('note-target');
+const noteTextEl = document.getElementById('note-text');
+const noteCancelEl = document.getElementById('note-cancel');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -740,6 +750,12 @@ function renderLegend(data) {
 function applyPayload(data) {
   payload = data;
 
+  // A new version invalidates any selection in progress: the coordinate may hold
+  // a different operation now, and a note about it would resolve against the
+  // build that just replaced what the user was looking at. Saved notes are
+  // untouched — they already carry the version they were drawn on.
+  cancelSelection();
+
   if (data.empty) {
     disposeBuild();
     titleEl.textContent = 'Waiting for a structure…';
@@ -924,6 +940,275 @@ function checkForSilence() {
 }
 
 // --------------------------------------------------------------------------- //
+// Markup
+//
+// The whole point of marking a build is to turn a coordinate into an operation.
+// "The block at [7,4,3] is wrong" makes Claude guess which of forty operations
+// to edit; "operation #4, the roof pyramid" is a targeted change. The server
+// does the resolving (against the version on screen, not the current one), but
+// the payload already carries a per-voxel operation index and the operation
+// labels, so the page can name the target before it posts anything.
+// --------------------------------------------------------------------------- //
+
+const raycaster = new THREE.Raycaster();
+const pointerNdc = new THREE.Vector2();
+
+/** Pixels of pointer travel that make a gesture a drag rather than a click. */
+const CLICK_SLOP = 5;
+
+const markerMaterial = new THREE.LineBasicMaterial({ color: 0xe0b341 });
+
+/** Server-owned note list, plus the in-progress selection. */
+let notes = [];
+let pendingCorner = null;   // first Shift-click of a region
+let pendingTarget = null;   // what the composer is about to attach a note to
+let marker = null;          // wireframe box over the current selection
+let pointerDownAt = null;   // for telling a click from an orbit drag
+
+function annotating() {
+  return annotateModeEl.checked;
+}
+
+/**
+ * The voxel under the pointer, or null.
+ *
+ * buildScene() leaves its per-instance records on each mesh, so an
+ * intersection's instanceId indexes straight back to the voxel that produced
+ * it. That matters more than it looks: rounding the intersection point to a
+ * cell would be wrong for every partial block, whose geometry does not fill its
+ * cell and whose surface can therefore sit inside a neighbour.
+ */
+function pickVoxel(event) {
+  if (!buildMeshes.length) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNdc, camera);
+  for (const hit of raycaster.intersectObjects(buildMeshes, false)) {
+    const record = hit.object.userData.records?.[hit.instanceId];
+    if (record) return record;
+  }
+  return null;
+}
+
+function operationLabel(index) {
+  if (index === undefined || index === null || index < 0) return null;
+  return payload?.operations?.find((entry) => entry.index === index)?.label || null;
+}
+
+/** Describe a target the way the tray and composer both want it. */
+function describeTarget(target) {
+  const where = target.kind === 'region'
+    ? `region [${target.start}] to [${target.end}]`
+    : `block [${target.pos}]`;
+  const label = operationLabel(target.operationIndex);
+  if (target.operationIndex === null || target.operationIndex === undefined) {
+    return `${where} — no operation placed this`;
+  }
+  return `${where} — operation #${target.operationIndex}${label ? ` (${label})` : ''}`;
+}
+
+function clearMarker() {
+  if (!marker) return;
+  scene.remove(marker);
+  marker.geometry.dispose();
+  marker = null;
+}
+
+/** Wireframe box over an inclusive coordinate range. */
+function showMarker(low, high) {
+  clearMarker();
+  const size = [0, 1, 2].map((i) => Math.abs(high[i] - low[i]) + 1);
+  const min = [0, 1, 2].map((i) => Math.min(low[i], high[i]));
+  const box = new THREE.BoxGeometry(size[0], size[1], size[2]);
+  marker = new THREE.LineSegments(new THREE.EdgesGeometry(box), markerMaterial);
+  box.dispose();  // EdgesGeometry copied what it needed
+  marker.position.set(
+    min[0] + size[0] / 2,
+    min[1] + size[1] / 2,
+    min[2] + size[2] / 2,
+  );
+  scene.add(marker);
+}
+
+function cancelSelection() {
+  pendingCorner = null;
+  pendingTarget = null;
+  clearMarker();
+  noteComposerEl.hidden = true;
+  noteTextEl.value = '';
+}
+
+function openComposer(target) {
+  pendingTarget = target;
+  noteTargetEl.textContent = describeTarget(target);
+  noteComposerEl.hidden = false;
+  noteTextEl.focus();
+}
+
+function onSceneClick(event) {
+  if (!annotating()) return;
+  const record = pickVoxel(event);
+  if (!record) {
+    // Clicking past the build is how you dismiss a half-made region, so it is
+    // not worth an error message.
+    if (pendingCorner) cancelSelection();
+    return;
+  }
+
+  const here = [record.x, record.y, record.z];
+
+  if (event.shiftKey) {
+    if (!pendingCorner) {
+      pendingCorner = { pos: here, operationIndex: record.operationIndex };
+      showMarker(here, here);
+      setStatus('Shift-click the opposite corner of the region.');
+      return;
+    }
+    const low = [0, 1, 2].map((i) => Math.min(pendingCorner.pos[i], here[i]));
+    const high = [0, 1, 2].map((i) => Math.max(pendingCorner.pos[i], here[i]));
+    showMarker(low, high);
+    setStatus('');
+    // The server decides which operation dominates a region; showing the corner
+    // block's operation here would often disagree with the note that comes back.
+    openComposer({ kind: 'region', start: low, end: high });
+    pendingCorner = null;
+    return;
+  }
+
+  showMarker(here, here);
+  openComposer({ kind: 'point', pos: here, operationIndex: record.operationIndex });
+}
+
+async function saveNote(text) {
+  if (!pendingTarget) return;
+  const body = {
+    kind: pendingTarget.kind,
+    note: text,
+    structure_version: payload?.version,
+  };
+  if (pendingTarget.kind === 'region') {
+    body.start = pendingTarget.start;
+    body.end = pendingTarget.end;
+  } else {
+    body.pos = pendingTarget.pos;
+  }
+
+  try {
+    const response = await fetch('/api/annotations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await errorText(response));
+    cancelSelection();
+    await refreshNotes();
+  } catch (error) {
+    setStatus(`Could not save that note: ${error.message}`, true);
+  }
+}
+
+/** The server's error text, which says what was actually wrong with the input. */
+async function errorText(response) {
+  // http.server puts send_error's message in the status line and an HTML body
+  // around it; the status line is the readable half.
+  return response.statusText || `HTTP ${response.status}`;
+}
+
+async function refreshNotes() {
+  try {
+    const response = await fetch('/api/annotations', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    notes = data.annotations || [];
+    renderNotes();
+  } catch {
+    // A failed refresh leaves the previous list on screen, which is better than
+    // blanking it: nothing has been lost, the page just did not hear back.
+  }
+}
+
+function renderNotes() {
+  const open = notes.filter((note) => note.status === 'open');
+  notesEl.hidden = notes.length === 0;
+  applyNotesEl.disabled = open.length === 0;
+  notesCountEl.textContent = open.length
+    ? `${open.length} open note${open.length === 1 ? '' : 's'}`
+    : 'all notes applied';
+
+  notesListEl.replaceChildren();
+  for (const note of notes) {
+    const item = document.createElement('li');
+    item.className = `note ${note.status}`;
+
+    const text = document.createElement('div');
+    const where = document.createElement('span');
+    where.className = 'where';
+    where.textContent = noteWhere(note);
+    const body = document.createElement('span');
+    body.className = 'body';
+    // User-authored, so never interpreted as markup.
+    body.textContent = note.note;
+    text.append(where, body);
+
+    const drop = document.createElement('button');
+    drop.className = 'drop';
+    drop.type = 'button';
+    drop.textContent = '×';
+    drop.title = 'Delete this note';
+    drop.addEventListener('click', () => dropNote(note.id));
+
+    item.append(text, drop);
+    notesListEl.appendChild(item);
+  }
+}
+
+function noteWhere(note) {
+  // Compared against null/undefined rather than truthiness: operation #0 is a
+  // real operation, and the obvious `note.op_index ? …` would file every note on
+  // the first one as if it belonged to the whole build.
+  const resolved = note.op_index !== null && note.op_index !== undefined;
+  if (note.kind === 'global') return 'whole build';
+  // A point or region that landed on nothing is not a note about the whole
+  // build; it is a note with no operation to edit, and saying so is the honest
+  // version.
+  const target = resolved ? `op #${note.op_index}` : 'no op';
+  if (note.kind === 'region') return `${target} · region`;
+  if (note.kind === 'point') return `${target} · [${note.pos}]`;
+  return target;
+}
+
+async function dropNote(id) {
+  try {
+    const response = await fetch(`/api/annotations/${id}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(await errorText(response));
+    await refreshNotes();
+  } catch (error) {
+    setStatus(`Could not delete that note: ${error.message}`, true);
+  }
+}
+
+async function applyNotes() {
+  applyNotesEl.disabled = true;
+  try {
+    const response = await fetch('/api/apply-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!response.ok) throw new Error(await errorText(response));
+    // The prompt echoes back over SSE like any other, so the transcript shows
+    // what was asked on the user's behalf. The dot is repainted from the same
+    // link fields a typed prompt returns.
+    setLink(await response.json());
+  } catch (error) {
+    setStatus(`Could not ask Claude to apply the notes: ${error.message}`, true);
+  } finally {
+    renderNotes();
+  }
+}
+
+// --------------------------------------------------------------------------- //
 // Transport
 // --------------------------------------------------------------------------- //
 
@@ -956,6 +1241,13 @@ async function refreshStatus() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const status = await response.json();
     setLink(status);
+    // Claude resolves notes as it applies them, and that happens server-side
+    // with no event of its own. Comparing the counts is enough to notice, and
+    // avoids refetching the list on every poll.
+    if (status.notes_total !== notes.length
+        || status.notes_open !== notes.filter((n) => n.status === 'open').length) {
+      await refreshNotes();
+    }
     await syncVersion(status.version);
   } catch (error) {
     setStatus(`Lost contact with the viewer server (${error.message}).`, true);
@@ -990,8 +1282,55 @@ promptFormEl.addEventListener('submit', (event) => {
   sendPrompt(text);
 });
 
+// --------------------------------------------------------------------------- //
+// Markup input
+// --------------------------------------------------------------------------- //
+
+annotateModeEl.addEventListener('change', () => {
+  annotateHelpEl.hidden = !annotating();
+  document.body.classList.toggle('annotating', annotating());
+  if (!annotating()) cancelSelection();
+});
+
+// Marking shares the left button with orbiting, so a click only counts if the
+// pointer barely moved. Without this every orbit that ends on the build would
+// open the note composer.
+canvas.addEventListener('pointerdown', (event) => {
+  pointerDownAt = { x: event.clientX, y: event.clientY };
+});
+
+canvas.addEventListener('pointerup', (event) => {
+  const start = pointerDownAt;
+  pointerDownAt = null;
+  if (!start || event.button !== 0) return;
+  const travelled = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+  if (travelled > CLICK_SLOP) return;
+  onSceneClick(event);
+});
+
+noteComposerEl.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const text = noteTextEl.value.trim();
+  if (!text) return;
+  saveNote(text);
+});
+
+noteCancelEl.addEventListener('click', cancelSelection);
+applyNotesEl.addEventListener('click', applyNotes);
+
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  // Escape from a half-made region or an open composer, not from the whole mode:
+  // losing the marking mode on a stray keypress would be more annoying.
+  if (pendingCorner || pendingTarget) {
+    cancelSelection();
+    setStatus('');
+  }
+});
+
 resize();
 tick();
 connectEvents();
 refreshStatus();
+refreshNotes();
 setInterval(refreshStatus, STATUS_INTERVAL_MS);
