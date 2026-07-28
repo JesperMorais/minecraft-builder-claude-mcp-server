@@ -36,6 +36,17 @@ const STATUS_INTERVAL_MS = 5000;
  */
 const REPLY_TIMEOUT_MS = 25000;
 
+/**
+ * Headless screenshot mode, requested with `?render=1`.
+ *
+ * The screenshot tool drives this page rather than a renderer of its own, so
+ * what a model sees when it reviews a build is the same picture the user is
+ * looking at. The flag strips the chrome, drops the live connections — the
+ * driver serves the payload straight to the page — and exposes a camera it can
+ * aim from Python.
+ */
+const RENDER_MODE = new URLSearchParams(window.location.search).has('render');
+
 const canvas = document.getElementById('scene');
 const titleEl = document.getElementById('title');
 const subtitleEl = document.getElementById('subtitle');
@@ -60,7 +71,14 @@ const noteTargetEl = document.getElementById('note-target');
 const noteTextEl = document.getElementById('note-text');
 const noteCancelEl = document.getElementById('note-cancel');
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: true,
+  // A screenshot is taken after the frame that drew it, and a drawing buffer
+  // cleared on composite reads back empty. Costs a copy per frame, so it is on
+  // only for the mode that is about to photograph the canvas.
+  preserveDrawingBuffer: RENDER_MODE,
+});
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -75,6 +93,10 @@ const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
+// Damping eases the camera toward where it was put over several frames, which
+// is right for a mouse and wrong for a screenshot: the shot would land
+// mid-glide, at an angle nobody asked for.
+if (RENDER_MODE) controls.enableDamping = false;
 
 // Hemisphere light keeps downward faces from going pure black; the directional
 // light is what casts shadows and makes edges legible.
@@ -1328,9 +1350,76 @@ window.addEventListener('keydown', (event) => {
   }
 });
 
+// --------------------------------------------------------------------------- //
+// Headless rendering
+// --------------------------------------------------------------------------- //
+
+/**
+ * Draw `count` frames and resolve.
+ *
+ * Render mode leaves tick() unstarted and draws only here. An idle animation
+ * loop is free on a GPU and ruinous without one: Chromium software-rasterises
+ * every frame, and a screenshot then has to queue behind the loop for the one
+ * thread doing the work. Dropping the loop took a capture from eight seconds to
+ * well under one.
+ */
+function drawFrames(count) {
+  return new Promise((resolve) => {
+    const step = () => {
+      controls.update();
+      renderer.render(scene, camera);
+      if (--count > 0) requestAnimationFrame(step);
+      else resolve();
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+/**
+ * Aim the camera and resolve once the result is on screen.
+ *
+ * Near/far planes and fog are re-derived from the distance the driver chose
+ * instead of reusing what frameCamera() left behind: those belong to its own
+ * framing, and a view taken from further out would be clipped by the far plane
+ * or hazed to nothing by the fog.
+ */
+async function renderView(position, target) {
+  camera.position.set(position[0], position[1], position[2]);
+  controls.target.set(target[0], target[1], target[2]);
+  const distance = camera.position.distanceTo(controls.target);
+  camera.far = distance * 12;
+  camera.updateProjectionMatrix();
+  scene.fog.near = distance * 4;
+  scene.fog.far = distance * 10;
+  // Two frames, not one: the first is what uploads the freshly generated canvas
+  // textures and fills the shadow map, so it can land before either is ready.
+  await drawFrames(2);
+}
+
+/**
+ * Reduce the page to its canvas and hand the driver its hooks.
+ *
+ * The chrome is hidden rather than never built, so this stays a mode of the
+ * real viewer rather than a second page that can quietly drift away from it.
+ */
+function startRenderMode() {
+  document.body.classList.add('render-mode');
+  window.mcbRender = {
+    // The driver serves /api/structure itself, so this never reaches the
+    // session's own state and rendering cannot disturb the build on screen.
+    ready: fetchPayload().then(() => drawFrames(2)),
+    view: renderView,
+  };
+}
+
 resize();
-tick();
-connectEvents();
-refreshStatus();
-refreshNotes();
-setInterval(refreshStatus, STATUS_INTERVAL_MS);
+
+if (RENDER_MODE) {
+  startRenderMode();
+} else {
+  tick();
+  connectEvents();
+  refreshStatus();
+  refreshNotes();
+  setInterval(refreshStatus, STATUS_INTERVAL_MS);
+}
