@@ -24,6 +24,14 @@ dist/
 output/
 minecraft_structures/
 
+# Eval runs: a few megabytes of PNG each, belonging to whoever produced them.
+# What gets compared between runs is the numbers in the report, and re-running
+# is cheaper than reviewing a diff of binary renders.
+#
+# Anchored to the repo root. An unanchored "evals/" matches at any depth and
+# silently excludes src/minecraft_builder/evals/ — the harness itself.
+/evals/
+
 # Windows artifacts
 nul
 

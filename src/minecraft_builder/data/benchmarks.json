@@ -1,0 +1,76 @@
+{
+  "name": "build-quality-v1",
+  "description": "Fourteen prompts spanning the shapes this tool is asked for, chosen so that a change to the style guide, the prompts or the linter shows up as a score movement rather than a hunch.",
+  "prompts": [
+    {
+      "id": "medieval_cottage",
+      "prompt": "Build a small medieval cottage with a thatched-look roof, a chimney, and a garden wall.",
+      "stresses": "The baseline. Small enough that every dimension is visible at once, common enough that failure is obvious."
+    },
+    {
+      "id": "castle_gatehouse",
+      "prompt": "Build a castle gatehouse with two flanking towers, battlements, and a portcullis arch.",
+      "stresses": "Silhouette and symmetry. Two towers plus a curtain wall is where massing either reads or collapses into a lump."
+    },
+    {
+      "id": "modern_villa",
+      "prompt": "Build a modern two-storey villa with flat roofs at different heights, large glass walls, and a terrace.",
+      "stresses": "Roofline scoring where there is no pitch. Tests whether flat-roof builds get depth from massing instead."
+    },
+    {
+      "id": "wizard_tower",
+      "prompt": "Build a tall wizard's tower with a conical roof, a protruding balcony, and glowing windows.",
+      "stresses": "Vertical proportion and the cone operation's arithmetic. Also the clearest test of visible lighting."
+    },
+    {
+      "id": "timber_barn",
+      "prompt": "Build a large timber barn with a gambrel roof, big double doors, and a hayloft opening.",
+      "stresses": "A gambrel is two pitches in one roof; the usual failure is one pitch and a flat top."
+    },
+    {
+      "id": "lighthouse",
+      "prompt": "Build a lighthouse on a rocky base with a striped tower, a lantern room, and a keeper's cottage attached.",
+      "stresses": "Grounding and the two-mass problem: a cylinder and a box that have to look like one building."
+    },
+    {
+      "id": "windmill",
+      "prompt": "Build a stone windmill with four sails, a wooden cap, and a small attached storehouse.",
+      "stresses": "Detail that projects into empty air. Sails are the hardest thing here to make read as sails."
+    },
+    {
+      "id": "japanese_teahouse",
+      "prompt": "Build a Japanese teahouse with a wide overhanging roof, a raised wooden platform, and paper screen walls.",
+      "stresses": "Overhang, which the repo's own worked anti-pattern gets wrong by burying the walls entirely."
+    },
+    {
+      "id": "nordic_longhouse",
+      "prompt": "Build a Nordic longhouse with a steep shingled roof reaching almost to the ground, carved posts, and a smoke hole.",
+      "stresses": "Extreme aspect ratio. A long thin footprint is where framing and proportion rules break down."
+    },
+    {
+      "id": "desert_market",
+      "prompt": "Build a desert market stall row: three adjoining sandstone shopfronts with awnings and hanging lanterns.",
+      "stresses": "Repetition without monotony, and a palette confined to one sand-coloured material family."
+    },
+    {
+      "id": "stone_chapel",
+      "prompt": "Build a small stone chapel with a bell tower, arched windows, and a pitched slate roof.",
+      "stresses": "Arches and openings. Window alignment across two masses is easy to get subtly wrong."
+    },
+    {
+      "id": "stone_bridge",
+      "prompt": "Build an arched stone bridge over a gap, with railings, lampposts, and abutments on both banks.",
+      "stresses": "A build with no roof and no interior — checks that the rubric does not just reward houses."
+    },
+    {
+      "id": "blacksmith_forge",
+      "prompt": "Build a blacksmith's forge with an open working side, a tall chimney, a lean-to roof, and a fire visible inside.",
+      "stresses": "An asymmetric, deliberately open structure. Tests whether a missing wall reads as intent or as a mistake."
+    },
+    {
+      "id": "greenhouse",
+      "prompt": "Build a Victorian greenhouse with a glass barrel roof, a stone knee wall, and iron framing.",
+      "stresses": "Transparency. Almost everything visible is glass, which is where flat-colour rendering is least forgiving."
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "name": "medieval_cottage",
+  "description": "Smoke-test fixture for the eval runner. One benchmark answered, so `python -m minecraft_builder.evals --structures examples/eval` produces a real run without anyone having to generate fourteen builds first.",
+  "operations": [
+    {"op": "cuboid", "start": [-1, 0, -1], "end": [9, 0, 7], "block": "stone_bricks"},
+    {"op": "hollow_box", "start": [0, 1, 0], "end": [8, 4, 6], "block": "oak_planks", "ceiling": false},
+
+    {"op": "cuboid", "start": [0, 1, 0], "end": [0, 4, 0], "block": "stripped_oak_log[axis=y]"},
+    {"op": "cuboid", "start": [8, 1, 0], "end": [8, 4, 0], "block": "stripped_oak_log[axis=y]"},
+    {"op": "cuboid", "start": [0, 1, 6], "end": [0, 4, 6], "block": "stripped_oak_log[axis=y]"},
+    {"op": "cuboid", "start": [8, 1, 6], "end": [8, 4, 6], "block": "stripped_oak_log[axis=y]"},
+
+    {"op": "cuboid", "start": [-1, 5, -1], "end": [9, 5, 7], "block": "dark_oak_planks"},
+    {"op": "cuboid", "start": [0, 6, 0], "end": [8, 6, 6], "block": "dark_oak_planks"},
+    {"op": "cuboid", "start": [1, 7, 1], "end": [7, 7, 5], "block": "dark_oak_planks"},
+    {"op": "cuboid", "start": [2, 8, 2], "end": [6, 8, 4], "block": "dark_oak_planks"},
+    {"op": "cuboid", "start": [3, 9, 3], "end": [5, 9, 3], "block": "dark_oak_planks"},
+
+    {"op": "cuboid", "start": [4, 1, 0], "end": [4, 3, 0], "block": "air"},
+    {"op": "block", "pos": [2, 3, 0], "block": "glass_pane"},
+    {"op": "block", "pos": [6, 3, 0], "block": "glass_pane"},
+    {"op": "block", "pos": [2, 3, 6], "block": "glass_pane"},
+    {"op": "block", "pos": [6, 3, 6], "block": "glass_pane"},
+    {"op": "block", "pos": [0, 3, 3], "block": "glass_pane"},
+    {"op": "block", "pos": [8, 3, 3], "block": "glass_pane"},
+
+    {"op": "cuboid", "start": [9, 1, 3], "end": [9, 11, 3], "block": "cobblestone"},
+
+    {"op": "block", "pos": [3, 4, -1], "block": "chain"},
+    {"op": "block", "pos": [3, 3, -1], "block": "lantern"},
+    {"op": "block", "pos": [5, 4, -1], "block": "chain"},
+    {"op": "block", "pos": [5, 3, -1], "block": "lantern"},
+    {"op": "block", "pos": [4, 4, 3], "block": "lantern"}
+  ]
+}

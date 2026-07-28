@@ -28,6 +28,13 @@ dev = [
 render = [
     "playwright>=1.40",
 ]
+# Automatic scoring in the eval harness. Optional because the harness is useful
+# without it — it still renders the benchmark set and writes a bundle to score by
+# hand — and because judging spends money, which is not a capability a plain
+# install should quietly acquire.
+eval = [
+    "anthropic>=0.40",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
