@@ -51,21 +51,34 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
 
 4. Register the server with your client.
 
-   **Claude Code** reads [`.mcp.json`](.mcp.json) from the project root, which is
-   already checked in. **Change the `command` to a Python that has this package
-   installed** — the committed path points at a local `.venv`, and the usual
-   failure is leaving it as a bare `python` that lacks the package:
+   **Claude Code** reads `.mcp.json` from the project root. That file is *not*
+   checked in — its `command` is an absolute path to an interpreter on one
+   specific machine, so a committed copy breaks everyone else. Copy the example
+   and edit it:
+
+   ```bash
+   cp .mcp.json.example .mcp.json      # Windows: copy .mcp.json.example .mcp.json
+   ```
 
    ```json
    {
      "mcpServers": {
        "minecraft-builder": {
-         "command": "/path/to/.venv/bin/python",
+         "command": "/path/to/minecraft-builder-claude-mcp-server/.venv/bin/python",
          "args": ["-m", "minecraft_builder"],
          "timeout": 600000
        }
      }
    }
+   ```
+
+   **`command` must be a Python that can import this package.** On Windows that
+   is `...\.venv\Scripts\python.exe`. A bare `python` commonly cannot — the
+   system `python3` often has no access to the project virtualenv — and this is
+   the most frequent setup failure. Check before you go further:
+
+   ```bash
+   /path/to/.venv/bin/python -c "import minecraft_builder"
    ```
 
    The first session in the project asks for consent — *"New MCP server found in
@@ -493,6 +506,8 @@ minecraft-builder-claude-mcp-server/
 ## Troubleshooting
 
 **MCP server not appearing:**
+- Does `.mcp.json` exist? It is gitignored, so a fresh clone has only
+  `.mcp.json.example` — copy it (see [Setup step 4](#setup)).
 - Completely restart Claude Desktop
 - Verify config file location and syntax
 - Run `claude mcp list` (Claude Code) — the server must show as **Connected**

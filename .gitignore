@@ -35,3 +35,8 @@ nul
 CLAUDE.md
 
 .venv/
+
+# MCP registration. The "command" is an absolute path to a machine-specific
+# interpreter, so a committed copy breaks every other machine. Copy
+# .mcp.json.example instead.
+.mcp.json

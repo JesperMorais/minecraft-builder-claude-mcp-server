@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Copy this file to .mcp.json and replace REPLACE_ME with the absolute path to a",
+    "Python interpreter that can import minecraft_builder. Verify it first:",
+    "  <that python> -c \"import minecraft_builder\"",
+    "A bare \"python\" usually cannot -- use the project virtualenv:",
+    "  Linux/macOS:  /path/to/minecraft-builder-claude-mcp-server/.venv/bin/python",
+    "  Windows:      C:\\\\path\\\\to\\\\minecraft-builder-claude-mcp-server\\\\.venv\\\\Scripts\\\\python.exe",
+    ".mcp.json is gitignored on purpose: the path is machine-specific, and a",
+    "committed one breaks every machine but the one it was written on."
+  ],
+  "mcpServers": {
+    "minecraft-builder": {
+      "command": "REPLACE_ME",
+      "args": ["-m", "minecraft_builder"],
+      "timeout": 600000
+    }
+  }
+}
