@@ -49,13 +49,28 @@ relief, not merely present in the JSON. The rule of thumb is no unbroken flat
 face longer than 6–8 blocks. A build whose depth techniques are all invisible
 from outside scores as if it had none.
 
-### roofline — pitch, ridge and overhang
+### roofline — how deliberately the build's top edge is resolved
 
-Does the roof look deliberate? Look for a real pitch rather than a flat cap, a
-ridge that resolves to a 1–2 wide line instead of a stepped plateau, and an
-overhang clear of the walls by a block or two. A pyramid whose arithmetic lands
-on a wide flat top is the most common failure and should score 3 or below. A
-build with no roof at all — an open box — scores 1.
+Score the treatment the *style* calls for, not the presence of a pitch. Decide
+first which kind of building this is, then judge it against its own kind.
+
+**Pitched styles** — cottage, barn, chapel, teahouse, tower. Look for a real
+slope rather than a flat cap, a ridge resolving to a 1–2 wide line instead of a
+stepped plateau or a wedding-cake of terraces, an overhang clear of the walls by
+a block or two, and a roof material that contrasts with the wall below it. A
+pyramid whose arithmetic lands on a wide flat top scores 3 or below.
+
+**Flat and roofless styles** — modern villa, desert market row, curtain wall,
+bridge, walled yard. There is nothing to pitch, so score what stands in for it:
+a parapet or cornice with its own cap course, crenellation, an awning or canopy
+line, a railing, a deliberate change of material at the top course, a projecting
+eave over a flat deck. A flat roof done properly is a 7 or 8 here.
+
+What scores low is the absence of *any* considered top edge — a wall that simply
+stops, a flat plane with nothing at its perimeter, a deck whose edge is the same
+block as its surface. Do not mark a build down for lacking a pitch its style
+would never have; a bridge has no roof by design, and its parapet and deck edge
+are the thing to score.
 
 ### detailing — trim, openings, lighting and ground contact
 

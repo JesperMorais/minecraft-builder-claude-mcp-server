@@ -54,8 +54,9 @@ rather than what you meant to build. Vague approval here wastes the render.
    different material from the walls, at a glance?
 3. Depth — do the walls cast shadows across themselves, or read as flat panels?
    Pillars, plinth and cornice should be visible as relief, not just present.
-4. Roofline — does the pitch look deliberate, the ridge capped, the overhang
-   clear of the walls? A flat or stepped top is the usual arithmetic failure.
+4. Roofline — is the top edge resolved the way this style wants it? Pitched:
+   deliberate slope, ridge capped, overhang clear of the walls. Flat or
+   roofless: a parapet, cornice, awning or railing rather than a bare plane.
 5. Light — can you actually see lanterns on the facade, or is the build dark?
    Lights hidden under an overhang count for nothing from outside.
 6. Grounding — does the base meet the ground, or does the build look pasted on
