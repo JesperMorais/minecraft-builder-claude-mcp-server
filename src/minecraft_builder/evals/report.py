@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .rubric import dimensions
 from .results import BuildResult, Run
+from .rubric import dimensions
 
 # What an unscored cell looks like. A middot rather than a blank so a column of
 # them is visible as "nobody scored this" instead of reading as a broken table.
