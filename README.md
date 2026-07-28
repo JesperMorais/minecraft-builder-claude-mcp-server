@@ -381,13 +381,23 @@ chat header shows which state you are in:
 | Dot | Meaning |
 |---|---|
 | green — "Claude is listening" | An `await_prompt` call is waiting right now; delivery is certain |
-| green — "connected to Claude" | An MCP session exists; channel prompts *should* reach it |
+| green — "Claude is busy, still listening" | Between `await_prompt` rounds — building or replying. It will be back |
+| green — "connected to Claude" | A channel event has come back answered, so the channel demonstrably works |
+| **amber** — "attached, but delivery unproven" | An MCP session exists, and that is all anyone knows. See below |
 | red | Nothing is listening — no session, or the loop has stopped |
 
-The distinction matters because channel events are **not acknowledged**: a
-session with channels blocked or disabled discards them silently, so "connected"
-is a weaker claim than "listening". Prompts typed while nobody collects them are
-queued (up to 64) and handed over when the next `await_prompt` call arrives.
+**Green means proven, amber means unknown.** That distinction is the whole point,
+because channel events are **not acknowledged**: a session with channels blocked
+by org policy or simply not enabled accepts the event and discards it in silence,
+which from the server looks exactly like success. So an attached session on its
+own earns amber, never green — hover the dot for what to do about it.
+
+Amber is not a failure state and does not cost you anything. Prompts are queued
+as well as pushed until the channel proves itself, so an amber prompt is still
+waiting to be collected: tell Claude in the terminal to *"listen to the viewer"*
+and it arrives. Once a reply has come back over the channel the dot goes green
+and stays green for the session. Queued prompts hold up to 64, oldest dropped
+first.
 
 ## JSON Structure Format
 
@@ -514,6 +524,16 @@ minecraft-builder-claude-mcp-server/
 - Check the `command` in your config is a Python that can import the package:
   `<that python> -c "import minecraft_builder"`. A bare `python` often is not.
 - Ensure package is installed: `pip list | grep minecraft-builder`
+
+**Dot is amber — "attached, but delivery unproven":**
+
+Expected, not broken. It means an MCP session exists but nothing has confirmed it
+receives channel events, which is undetectable until one comes back answered. Your
+prompt is queued regardless, so the fix is to give it a collector: tell Claude in
+the terminal to *"listen to the viewer"*. The dot goes green and the queued prompt
+is picked up. If you want channel delivery instead, work through the list below —
+and note that on a Team/Enterprise plan amber is the normal steady state until an
+admin enables channels.
 
 **Chat box says "no Claude session listening":**
 

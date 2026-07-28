@@ -142,6 +142,10 @@ html, body {
 
 .dot.live { background: #4ec97a; }
 .dot.down { background: #e0674f; }
+/* Unverified, not broken: a session is attached but nothing has come back yet,
+   and whether events arrive is undetectable until one is answered. Green here
+   would be a claim the server cannot support. */
+.dot.pending { background: #e0b341; }
 
 #messages {
   list-style: none;

@@ -45,11 +45,39 @@ based on [Keep a Changelog](https://keepachangelog.com/).
   chat work where channels cannot: org policies that block
   `--dangerously-load-development-channels`, Bedrock/Vertex/Foundry, or a
   session started without the flag. Channels still work and take precedence
-  when enabled; a channel-delivered prompt is never double-delivered through
-  the queue.
-- The viewer's status dot now distinguishes *proven* listening (an
-  `await_prompt` call is blocked right now) from the weaker "an MCP session
-  exists", and `/api/status` reports `waiting`, `polling` and `queued`.
+  once they have proven themselves, at which point a channel-delivered prompt
+  is not also queued.
+- **Proof of delivery for the channel path.** Channel events are
+  unacknowledged, so nothing on the outbound side could tell a delivered push
+  from one a policy-blocked client dropped. A reply coming back is that proof:
+  the `reply` tool latches `ChannelBridge.confirm()`, which is ignored unless an
+  event was pushed first — Claude also calls `reply` from ordinary terminal
+  turns and from the `await_prompt` loop, neither of which involves a channel.
+  `/api/status` reports `confirmed` alongside `waiting`, `polling`, `queued` and
+  `events_sent`, and all three responses that answer "does chat work" now come
+  from one `_link_status()` so they cannot disagree.
+
+### Fixed
+- **Browser prompts were silently destroyed whenever an MCP session was
+  attached.** `ChannelBridge.push()` reports that a frame reached the transport,
+  not that Claude received it, and the bridge is attached for every stdio
+  session whether or not the channel is enabled. A session with channels
+  blocked by org policy therefore accepted the write, discarded the
+  notification, and `push()` still returned `True` — so the HTTP layer skipped
+  the queue and the prompt was gone. The `await_prompt` fallback could not save
+  it either, because nothing was ever queued: a loop blocked and waiting
+  received nothing, while `/api/prompt` answered `delivered=True`. Prompts are
+  now queued as well as pushed until the channel is confirmed, and the queued
+  copies are dropped once it is, so `await_prompt` cannot replay an
+  already-answered prompt. The whole test suite ran with the bridge detached,
+  which is why this was invisible; there is now a fixture that attaches one.
+- **The status dot told the truth in its label but not in its colour.** It ORed
+  `attached` into green, so "an MCP session exists" was painted identically to
+  proven delivery — the reason a green dot reported a healthy link through an
+  entire debugging session in which nothing arrived. Green is now reserved for
+  evidence that a prompt gets collected (`waiting`, `polling`, or a confirmed
+  channel), a bare `attached` is amber with a tooltip explaining what to do
+  about it, and nothing listening stays red.
 
 ## [0.2.0]
 

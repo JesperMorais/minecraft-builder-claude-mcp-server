@@ -829,18 +829,58 @@ function localNote(text) {
   renderMessage({ id: `local-${Date.now()}`, role: 'system', text });
 }
 
-function setLink(attached, waiting) {
-  // "waiting" (an await_prompt call is blocked on this queue right now) is the
-  // only state that proves delivery; "attached" just means an MCP session
-  // exists, and with channels blocked by org policy its pushes vanish silently.
-  const live = waiting === true || attached === true;
-  linkDotEl.classList.toggle('live', live);
-  linkDotEl.classList.toggle('down', waiting === false && attached === false);
-  linkLabelEl.textContent = waiting
-    ? 'Claude is listening'
-    : attached
-      ? 'connected to Claude'
-      : 'no Claude session listening';
+/**
+ * Paint the link indicator from an /api/status-shaped object.
+ *
+ * Three colours, not two, because there are three genuinely different states
+ * and the middle one used to be painted as the good one.
+ *
+ * Green is reserved for evidence that a prompt gets collected: `waiting` (an
+ * await_prompt call is blocked on the queue right now), `polling` (one was
+ * blocked within the grace window, so the loop is between rounds and will be
+ * back), or `confirmed` (an event we pushed came back answered, the only proof
+ * the channel round trip closes).
+ *
+ * `attached` is none of those. It says an MCP session exists over stdio, with or
+ * without the channel enabled; when org policy blocks channels its pushes are
+ * discarded in silence, and nothing on the outbound side can tell that from
+ * success. So it gets amber: something is there, nothing has proven it. ORing it
+ * into green is what let this dot report a healthy link for an entire debugging
+ * session in which not one prompt was delivered.
+ */
+function setLink(status) {
+  const proven = status.waiting === true
+    || status.polling === true
+    || status.confirmed === true;
+  const attached = status.attached === true;
+
+  linkDotEl.classList.toggle('live', proven);
+  linkDotEl.classList.toggle('pending', !proven && attached);
+  linkDotEl.classList.toggle('down', !proven && !attached);
+
+  if (status.waiting === true) {
+    linkLabelEl.textContent = 'Claude is listening';
+    linkDotEl.title = 'An await_prompt call is waiting on your next message.';
+  } else if (status.polling === true) {
+    linkLabelEl.textContent = 'Claude is busy, still listening';
+    linkDotEl.title = 'Claude is between await_prompt rounds — probably building '
+      + 'or replying. Your prompt will be picked up.';
+  } else if (status.confirmed === true) {
+    linkLabelEl.textContent = 'connected to Claude';
+    linkDotEl.title = 'The channel has answered an event, so prompts are '
+      + 'reaching this session.';
+  } else if (attached) {
+    linkLabelEl.textContent = 'attached, but delivery unproven';
+    linkDotEl.title = 'An MCP session exists, but nothing has confirmed it '
+      + 'receives anything — channel events are not acknowledged, so a session '
+      + 'with channels disabled or blocked by org policy looks identical from '
+      + 'here. Your prompt is queued as well: ask Claude in the terminal to '
+      + 'listen with its await_prompt tool and it will be collected.';
+  } else {
+    linkLabelEl.textContent = 'no Claude session listening';
+    linkDotEl.title = 'Nothing is collecting prompts. Ask Claude in the terminal '
+      + 'to listen with its await_prompt tool.';
+  }
 }
 
 async function sendPrompt(text) {
@@ -852,11 +892,14 @@ async function sendPrompt(text) {
       body: JSON.stringify({ text }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const { delivered } = await response.json();
+    // The reply carries the same link fields as /api/status, so the dot is
+    // repainted from what the server actually knows rather than inferred from
+    // "delivered" — which cannot distinguish an unproven push from a real one.
+    const result = await response.json();
     // The server echoes the prompt back over SSE, so it is not rendered here.
-    awaitingReplySince = delivered ? Date.now() : null;
+    awaitingReplySince = result.delivered ? Date.now() : null;
     warnedAboutSilence = false;
-    setLink(delivered, false);
+    setLink(result);
   } catch (error) {
     localNote(`Could not send that prompt: ${error.message}`);
   } finally {
@@ -890,7 +933,7 @@ function connectEvents() {
   source.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data.type === 'snapshot') {
-      setLink(data.attached, data.waiting);
+      setLink(data);
       for (const message of data.messages) renderMessage(message);
       syncVersion(data.version).catch(() => {});
       setStatus('');
@@ -912,7 +955,7 @@ async function refreshStatus() {
     const response = await fetch('/api/status', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const status = await response.json();
-    setLink(status.attached, status.waiting);
+    setLink(status);
     await syncVersion(status.version);
   } catch (error) {
     setStatus(`Lost contact with the viewer server (${error.message}).`, true);
