@@ -6,6 +6,39 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **An eval harness, so build-quality changes can be measured instead of
+  argued.** The style guide, the linter and the visual critique are all claims
+  about what makes a build good, and none of them could tell you whether editing
+  one of them improved the output. `python -m minecraft_builder.evals` renders a
+  fixed set of fourteen benchmark builds and scores them against a fixed rubric,
+  so the same question can be asked before and after a change and the two
+  answers compared. See `docs/EVAL.md`.
+
+  It deliberately does not generate the builds — a model does that through the
+  usual tools, and the harness consumes the structure JSON. What gets measured
+  is therefore the pipeline the model actually runs inside, not a
+  reimplementation of it that would drift and quietly measure nothing.
+
+  `data/build_rubric.md` is the single source of truth for scoring: the six
+  dimensions are *parsed out of its headings*, and the same text is handed to
+  the judge verbatim, so the document a human scores against and the
+  instructions the judge follows cannot disagree. Adding a dimension is a
+  documentation edit.
+
+  Automatic judging is behind the `eval` extra and an explicit `--judge` flag —
+  one API request per build, so a harness that scored by default would be run
+  once and then avoided. The judge sees the rubric and the renders and nothing
+  else; one that could read the structure JSON would be scoring the description
+  of the build and would reward a model for claiming a plinth it never rendered.
+  Without the extra the harness still writes the render bundle and a report with
+  an empty score table, and says how to enable judging.
+
+  Every failure is one row rather than the run: a missing structure, an
+  unrenderable build or a rate-limited judge lands in that build's `error` and
+  is excluded from the means — never scored zero, which would report a quality
+  regression where there was a missing file. `scores.json` records the benchmark
+  set's fingerprint and the judge model, because two runs are only comparable if
+  they asked the same questions of the same judge.
 - **The review loop: render, critique, patch, repeat.** Having a tool that
   returns pictures is not the same as using it, so the loop is now the path the
   server steers toward — in the system prompt, in the export tool's description,

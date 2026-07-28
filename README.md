@@ -709,6 +709,22 @@ ruff check src tests
 mypy src/minecraft_builder
 ```
 
+### Measuring build quality
+
+Changes to the style guide, the tool prompts or the linter are all arguments
+about what makes a build good, and none of them can tell you whether the output
+actually improved. The eval harness can: it renders a fixed set of fourteen
+benchmark builds and scores them against a fixed rubric, so the same question
+can be asked before and after a change.
+
+```bash
+python -m minecraft_builder.evals --list                      # the prompts
+python -m minecraft_builder.evals --structures examples/eval  # render a bundle
+```
+
+Scoring is by hand from the bundle, or automatic with a vision model behind the
+`eval` extra (opt-in — it costs money). See [docs/EVAL.md](docs/EVAL.md).
+
 ## Dependencies
 
 - **mcp** (>=0.9.0) - MCP Python SDK
@@ -720,6 +736,11 @@ Optional, in the `render` extra:
 
 - **playwright** (>=1.40) - Headless Chromium for `render_structure`. Also needs
   `playwright install chromium`; nothing else depends on it
+
+Optional, in the `eval` extra:
+
+- **anthropic** (>=0.40) - Vision-model scoring for the eval harness. Only the
+  `--judge` path uses it; rendering and manual scoring work without it
 
 ## Contributing
 
