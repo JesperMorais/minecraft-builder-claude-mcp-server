@@ -21,6 +21,13 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.8.0",
 ]
+# render_structure only. Out of the base install because it brings a browser with
+# it — ~150 MB once `playwright install chromium` has run — which is a steep
+# price for anyone who only wants the schematic tools. Every other tool works
+# without it, and the render tool names the install command when it is missing.
+render = [
+    "playwright>=1.40",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
