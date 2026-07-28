@@ -365,6 +365,21 @@ stands, `elevation` is degrees above the horizon). Rendering is read-only: it
 serves the structure straight to the headless page, so the version you have on
 screen and any notes you have not applied are left alone.
 
+**With the extra installed, looking becomes the default build flow.** Every
+render comes back with a six-point visual critique — silhouette, palette, depth,
+roofline, light, grounding — and the server asks Claude to answer it against the
+images, fix the worst single fault with `patch_operations`, and render again, for
+up to three rounds. It is the counterpart to the style linter: the linter reports
+what it can count from the JSON, the critique asks what only the picture can
+answer, and one fix per round is what makes the next critique mean anything.
+
+Two things the loop deliberately will not do. It **stops the moment you say
+something or start marking up the build** — your notes outrank the model's own
+opinion, and a revision landing mid-annotation would repoint the note you are
+writing. And none of that guidance exists without the extra installed, so a
+default install is never steered toward a tool that would only tell it to install
+a browser.
+
 It is an optional extra, because it brings a browser with it:
 
 ```bash

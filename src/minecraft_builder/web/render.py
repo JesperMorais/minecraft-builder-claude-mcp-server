@@ -32,11 +32,13 @@ means the same thing it does on the game's F3 screen.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import math
 import re
 import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -285,6 +287,28 @@ def _checked_size(width: int, height: int) -> Tuple[int, int]:
 # --------------------------------------------------------------------------- #
 # The browser
 # --------------------------------------------------------------------------- #
+
+@lru_cache(maxsize=1)
+def rendering_available() -> bool:
+    """Whether the server should be telling the model to render at all.
+
+    This gates *guidance*, not the tool. It decides what goes into the system
+    prompt and into the build tools' results, both of which are written once at
+    startup, and steering a model toward a tool that answers "install a browser"
+    would be worse than saying nothing — the advice would arrive on every build.
+
+    ``find_spec`` rather than an import: nothing here needs the module loaded,
+    and the answer is wanted before anyone has asked for a picture.
+
+    It answers "is the library installed", not "will a render succeed". The
+    browser is a second download, and locating it means reproducing Playwright's
+    own cache-path resolution — a rule that would rot without anyone noticing.
+    So an install with the library and no browser is still told to render, and
+    the tool answers with the one command that fixes it. One self-correcting
+    round beats guidance that quietly goes stale.
+    """
+    return importlib.util.find_spec("playwright") is not None
+
 
 def _playwright_api() -> Any:
     """The Playwright sync API, or a RenderError explaining how to get it.

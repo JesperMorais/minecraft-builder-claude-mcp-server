@@ -20,7 +20,7 @@ from .paths import (
 )
 from .preview import render_preview, stats_summary
 from .schema import MinecraftStructure, StructureTooLargeError
-from .style import STYLE_CHECKLIST, load_style_guide
+from .style import STYLE_CHECKLIST, VISUAL_CRITIQUE_CHECKLIST, load_style_guide
 from .versions import (
     DEFAULT_VERSION,
     LATEST_VERSION,
@@ -45,6 +45,7 @@ from .web.render import (
     RenderError,
     default_output_directory,
     render_views,
+    rendering_available,
     select_views,
 )
 
@@ -93,8 +94,49 @@ select an operation, and attach a note. When they ask you to apply their notes:
    what you changed. Leave a note open if you did not address it, and say so.
 """
 
+# Appended to the instructions above, but only where a render can actually
+# happen (see rendering_available). This loop closes the gap every other tool
+# here leaves open: the model emits JSON and, until it can look at a picture,
+# nothing it calls will tell it the roof came out flat.
+REVIEW_LOOP_INSTRUCTIONS = """\
+You can see your own builds now, and you are expected to look before calling one
+finished. After show_structure, and before create_minecraft_structure writes a
+file:
+
+1. Call render_structure. It hands you photographs of the build.
+2. Answer the visual critique checklist that comes back with them, against the
+   images, naming what is actually wrong rather than approving your own work.
+3. Fix the worst single fault with patch_operations, editing the operation
+   responsible. Do not regenerate — that changes the parts that came out right,
+   and you will not know which edit helped.
+4. Render again and look again.
+
+Three rounds is the budget. Builds improve sharply for two or three passes and
+then stop; a fourth is usually you talking yourself into a change. Stop there and
+tell the user what you would still like to fix.
+
+Stop the loop immediately once the user says anything or starts marking up the
+build. Their notes outrank your own critique, and a revision landing while they
+are annotating repoints the note they are in the middle of writing. Deal with
+what they said first, then resume only if it is still worth it.
+"""
+
+
+def build_instructions() -> str:
+    """Claude's system-prompt guidance for this server.
+
+    The review loop is kept separate rather than written into one string because
+    guidance naming an uninstalled tool is worse than no guidance: it arrives on
+    every single build, and the fix is a browser download the user may have
+    declined on purpose.
+    """
+    if rendering_available():
+        return CHANNEL_INSTRUCTIONS + "\n" + REVIEW_LOOP_INSTRUCTIONS
+    return CHANNEL_INSTRUCTIONS
+
+
 # Initialize MCP server
-app = Server("minecraft-builder", instructions=CHANNEL_INSTRUCTIONS)
+app = Server("minecraft-builder", instructions=build_instructions())
 
 # await_prompt wait bounds, in seconds. The ceiling stays comfortably under the
 # 600s client timeout in .mcp.json so a full wait returns a result instead of
@@ -107,6 +149,40 @@ MIN_AWAIT_SECONDS = 5.0
 def _log(message: str) -> None:
     """Log to stderr — stdout is reserved for the MCP stdio transport."""
     print(message, file=sys.stderr)
+
+
+def _look_before_done() -> str:
+    """Names the next step on the result of anything that produces a build.
+
+    The system prompt already carries the loop, but a build result is where it
+    is actionable, and guidance read at the moment it applies gets followed far
+    more reliably than guidance read once at startup. Empty where nothing can
+    render, which is what stops the loop being advertised where it only fails.
+    """
+    if not rendering_available():
+        return ""
+    return (
+        "\n👁  Look at it before calling it done: render_structure hands you "
+        "photographs of this build. Fix the worst thing you see with "
+        "patch_operations and render again — three rounds at most, and stop as "
+        "soon as the user says anything.\n"
+    )
+
+
+def _render_before_export() -> str:
+    """The same nudge for the export tool, where not looking costs the most.
+
+    A file is the one output that leaves this server. The user pastes it into a
+    world, and that is a poor moment to notice the roof came out flat.
+    """
+    if not rendering_available():
+        return ""
+    return """
+LOOK AT IT BEFORE WRITING A FILE. Call show_structure, then render_structure,
+answer the visual critique that comes back with the images, and fix what you see
+with patch_operations. Writing a schematic nobody has looked at is the most
+expensive mistake available here.
+"""
 
 
 def _structure_name() -> str:
@@ -224,8 +300,7 @@ INPUT METHODS:
 - Small/medium builds: provide the JSON directly in structure_json.
 - Very large builds: write the JSON to a file and pass json_file_path instead.
 
-""" + STYLE_CHECKLIST + """
-
+""" + STYLE_CHECKLIST + _render_before_export() + """
 Before calling this tool, ask the user where they would like to save the .schem file.""",
             inputSchema={
                 "type": "object",
@@ -549,11 +624,14 @@ screenshots the real viewer and returns the images, so you can look at what you
 actually made.
 
 Use it after building anything whose appearance matters, before you tell the user
-you are done. Then look, honestly: does the roof sit on the walls or float above
-them, do the windows line up, is the silhouette a shape or a box, are the
-proportions what you intended? When something is wrong, fix that one operation
-with patch_operations rather than regenerating — a rewrite quietly changes the
-parts that were fine.
+you are done. A visual critique checklist comes back with the images — answer it
+against them, honestly, then fix the worst single fault with patch_operations
+rather than regenerating, and render again. Three rounds is the budget; builds
+stop improving after that.
+
+Stop the loop as soon as the user says anything or starts marking up the build.
+Their notes outrank your own critique, and a revision landing mid-annotation
+repoints the note they are writing.
 
 Five 800x600 views by default: four isometric corners and one level elevation.
 Angles are compass bearings for where the CAMERA STANDS, matching Minecraft's
@@ -637,7 +715,13 @@ affected.""",
 def _render_result(
     structure: MinecraftStructure, rendered: list[RenderedView]
 ) -> list[TextContent | ImageContent]:
-    """A summary, then each angle labelled and shown.
+    """The critique rubric, then each angle labelled and shown.
+
+    The checklist rides on every render rather than living only in the system
+    prompt, because it is read once per loop iteration and the loop is where it
+    does its work. Without it "render and critique" degrades into approving your
+    own build in general terms, which is the failure this whole path exists to
+    prevent.
 
     Labels are interleaved with the images rather than listed up front. The
     content arrives as one flat sequence, so a legend at the top would have to be
@@ -649,9 +733,7 @@ def _render_result(
         "",
         f"📁 Saved to: {rendered[0].path.parent}",
         "",
-        "Now look at them. If something is off, edit the operation responsible "
-        "with patch_operations — regenerating the whole structure would change "
-        "the parts that came out right.",
+        VISUAL_CRITIQUE_CHECKLIST,
     ]
     content: list[TextContent | ImageContent] = [
         TextContent(type="text", text="\n".join(lines))
@@ -866,7 +948,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent | ImageConten
 {size.width}x{size.height}x{size.length} blocks
 
 📐 {style_report}
-
+{_look_before_done()}
 The page has already updated, so do not call show_structure for this. If the
 patches came from the user's notes, close them with resolve_annotations."""
         )]
@@ -899,7 +981,7 @@ patches came from the user's notes, close them with resolve_annotations."""
 - Operations: {len(structure.blocks) + len(structure.operations)}
 
 📐 {style_report}
-
+{_look_before_done()}
 The page updates on its own, so tell the user to open that link once and leave it
 open — later versions appear without a reload."""
             )]

@@ -6,6 +6,8 @@ package instead of depending on a source checkout. Two forms are exposed:
 * ``STYLE_CHECKLIST`` — the compact, always-in-context version embedded in the
   ``create_minecraft_structure`` description, so the non-negotiable rules apply
   even if the model never asks for the full guide.
+* ``VISUAL_CRITIQUE_CHECKLIST`` — the same guide asked as questions about a
+  *picture*, returned with every render.
 * ``load_style_guide()`` — the full document, served by the
   ``get_build_style_guide`` tool.
 """
@@ -33,6 +35,29 @@ get_build_style_guide first. These rules apply regardless:
   lantern over torch. A build with no light sources looks dead.
 - Silhouette: break the rectangle (L/T/U footprint, or a wing, bay or tower).
 - Interior: carve it with "air", give it a floor, and light it."""
+
+# Returned with every render, so it has to stay short enough to reread each
+# round. Deliberately phrased as what to LOOK for rather than what to count:
+# lint.py already counts, and it reports every one of these it can reach from
+# the JSON. What it cannot see is whether the result looks right — a build can
+# satisfy the palette ratio and still read as one grey slab, or place its
+# lanterns correctly and still hide every one behind a roof overhang.
+VISUAL_CRITIQUE_CHECKLIST = """VISUAL CRITIQUE — go through these against the images, and say what you SEE
+rather than what you meant to build. Vague approval here wastes the render.
+1. Silhouette — trace the outline against the sky. Is it a plain box? Is there
+   one element clearly taller than the rest to read as a focal point?
+2. Palette — does one material swamp the picture? Is the roof obviously a
+   different material from the walls, at a glance?
+3. Depth — do the walls cast shadows across themselves, or read as flat panels?
+   Pillars, plinth and cornice should be visible as relief, not just present.
+4. Roofline — does the pitch look deliberate, the ridge capped, the overhang
+   clear of the walls? A flat or stepped top is the usual arithmetic failure.
+5. Light — can you actually see lanterns on the facade, or is the build dark?
+   Lights hidden under an overhang count for nothing from outside.
+6. Grounding — does the base meet the ground, or does the build look pasted on
+   top of it? Look for the plinth and a softened ground line.
+Name the worst offender, fix that one operation with patch_operations, and
+render again. Do not fix everything at once — you cannot tell what helped."""
 
 
 @lru_cache(maxsize=1)

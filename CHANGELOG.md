@@ -6,6 +6,36 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **The review loop: render, critique, patch, repeat.** Having a tool that
+  returns pictures is not the same as using it, so the loop is now the path the
+  server steers toward — in the system prompt, in the export tool's description,
+  and in the result text of everything that produces a build, which is where the
+  advice is actually actionable. Three rounds is the stated budget; builds
+  improve sharply for two or three passes and then stop.
+
+  Every render returns a six-point visual critique (`VISUAL_CRITIQUE_CHECKLIST`
+  in `style.py`) covering silhouette, palette, depth, roofline, light and
+  grounding. It is phrased as what to *look* for rather than what to count,
+  because `lint.py` already counts and reports everything it can reach from the
+  JSON — what it cannot see is whether the result looks right. A build can
+  satisfy the palette ratio and still read as one grey slab, or place its
+  lanterns correctly and hide every one behind a roof overhang. The rubric asks
+  for one fix per round on purpose: fixing everything at once means not knowing
+  which edit helped.
+
+  **The loop yields to the human.** It stops as soon as the user says anything or
+  starts marking up the build, because a revision landing mid-annotation
+  repoints the note they are writing — the same failure annotations resolve at
+  creation time to avoid. Renders still never touch `ViewerState`.
+
+  **None of this guidance appears without the render extra installed.**
+  `rendering_available()` probes once at startup with `find_spec`, and the
+  instructions, the export tool's description and the build results all drop
+  their render step when it comes back false. Guidance naming an uninstalled tool
+  is worse than no guidance: it would arrive on every single build, and the fix
+  is a browser download the user may have declined deliberately. The tool itself
+  stays listed either way, so the feature is discoverable and can explain its own
+  install.
 - **`render_structure`: Claude can see its own builds.** Every other feedback
   path in this server describes a build in words — ASCII slices, block counts, a
   style verdict. This one photographs it. A headless Chromium loads the real
