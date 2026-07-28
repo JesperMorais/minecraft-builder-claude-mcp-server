@@ -40,3 +40,7 @@ CLAUDE.md
 # interpreter, so a committed copy breaks every other machine. Copy
 # .mcp.json.example instead.
 .mcp.json
+
+# Extracted resource-pack textures (Mojang assets — never commit)
+texturepack_out/
+*.mcpack-textures/
