@@ -1,12 +1,13 @@
 """MCP Server for Minecraft structure generation."""
 
+import base64
 import json
 import sys
 import traceback
 from typing import Any
 
 from mcp.server import Server
-from mcp.types import Icon, TextContent, Tool
+from mcp.types import Icon, ImageContent, TextContent, Tool
 from pydantic import ValidationError
 
 from .converter import DEFAULT_FORMATS, OUTPUT_FORMATS, SchematicConverter
@@ -34,6 +35,18 @@ from .web.annotations import ANNOTATIONS as viewer_annotations
 from .web.channel import BRIDGE as channel_bridge
 from .web.chat import CHAT as viewer_chat
 from .web.prompts import PROMPTS as viewer_prompts
+from .web.render import (
+    DEFAULT_HEIGHT,
+    DEFAULT_VIEWS,
+    DEFAULT_WIDTH,
+    MAX_DIMENSION,
+    MIN_DIMENSION,
+    RenderedView,
+    RenderError,
+    default_output_directory,
+    render_views,
+    select_views,
+)
 
 # Added to Claude's system prompt when this server is loaded. It is the only
 # place Claude learns what a <channel> event from the viewer means and how to
@@ -523,12 +536,145 @@ json_file_path). Saves nothing to disk.""",
                     }
                 }
             }
+        ),
+        Tool(
+            name="render_structure",
+            icons=[Icon(src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHJlY3QgZmlsbD0iIzNhNDI1MCIgeD0iMSIgeT0iNiIgd2lkdGg9IjIyIiBoZWlnaHQ9IjE0IiByeD0iMiIvPjxwYXRoIGZpbGw9IiMzYTQyNTAiIGQ9Ik04IDNoOGwxLjUgM2gtMTF6Ii8+PGNpcmNsZSBmaWxsPSIjN2ZiM2ZmIiBjeD0iMTIiIGN5PSIxMyIgcj0iNC41Ii8+PGNpcmNsZSBmaWxsPSIjMGQxMTE3IiBjeD0iMTIiIGN5PSIxMyIgcj0iMiIvPjwvc3ZnPg==", mimeType="image/svg+xml")],
+            description="""Photographs the build from several angles and hands you the pictures. THIS ONE IS FOR YOU.
+
+Every other feedback path in this server describes a build in words. This one
+shows it. show_structure puts a 3D view in front of the *user*; preview_structure
+gives you ASCII slices that flatten a roof into a rectangle. render_structure
+screenshots the real viewer and returns the images, so you can look at what you
+actually made.
+
+Use it after building anything whose appearance matters, before you tell the user
+you are done. Then look, honestly: does the roof sit on the walls or float above
+them, do the windows line up, is the silhouette a shape or a box, are the
+proportions what you intended? When something is wrong, fix that one operation
+with patch_operations rather than regenerating — a rewrite quietly changes the
+parts that were fine.
+
+Five 800x600 views by default: four isometric corners and one level elevation.
+Angles are compass bearings for where the CAMERA STANDS, matching Minecraft's
+compass (0 = north = -Z, 90 = east = +X), so the "southeast" view is the one
+that shows you the south and east faces.
+
+With no structure argument it renders whatever show_structure last displayed,
+which is usually what you want mid-revision. It never changes what the user is
+looking at — taking a picture does not bump the version or disturb their notes.
+
+Needs the optional render extra (Playwright + headless Chromium). If it is not
+installed the tool says so and names the command; nothing else in this server is
+affected.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "structure_json": {
+                        "type": "string",
+                        "description": "JSON string defining the structure (same format as create_minecraft_structure). Omit to render what show_structure last displayed."
+                    },
+                    "json_file_path": {
+                        "type": "string",
+                        "description": "Path to a .json structure file (alternative to structure_json)."
+                    },
+                    "count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": (
+                            "How many angles to render. Default " + str(len(DEFAULT_VIEWS))
+                            + ". Fewer is a prefix of the standard set, best first: 1 is the "
+                            "isometric corner the user's viewer opens at, 2 adds the level "
+                            "elevation, 3 shows the back. Past the named set the extra angles "
+                            "are an even orbit. Every image costs you tokens, so ask for what "
+                            "you need to judge the build and no more."
+                        )
+                    },
+                    "angles": {
+                        "type": "array",
+                        "description": "Specific camera angles, overriding count. Use when you want to look at one part of the build.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "azimuth": {
+                                    "type": "number",
+                                    "description": "Compass bearing for where the camera stands: 0 north, 90 east, 180 south, 270 west."
+                                },
+                                "elevation": {
+                                    "type": "number",
+                                    "description": "Degrees above the horizon, -89 to 89. 0 is a level look; 30 is the standard isometric."
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": "Label for this angle, also used in its filename. Defaults to the bearing."
+                                }
+                            },
+                            "required": ["azimuth", "elevation"]
+                        }
+                    },
+                    "width": {
+                        "type": "integer",
+                        "minimum": MIN_DIMENSION,
+                        "maximum": MAX_DIMENSION,
+                        "description": f"Image width in pixels. Default {DEFAULT_WIDTH}."
+                    },
+                    "height": {
+                        "type": "integer",
+                        "minimum": MIN_DIMENSION,
+                        "maximum": MAX_DIMENSION,
+                        "description": f"Image height in pixels. Default {DEFAULT_HEIGHT}."
+                    },
+                    "output_directory": {
+                        "type": "string",
+                        "description": "Where to write the PNGs. Defaults to a temp folder, since these are working images from a review loop; pass a directory only if the user wants to keep them."
+                    }
+                }
+            }
         )
     ]
 
 
+def _render_result(
+    structure: MinecraftStructure, rendered: list[RenderedView]
+) -> list[TextContent | ImageContent]:
+    """A summary, then each angle labelled and shown.
+
+    Labels are interleaved with the images rather than listed up front. The
+    content arrives as one flat sequence, so a legend at the top would have to be
+    counted back against, and the entire point of the tool is that looking at the
+    build should be effortless.
+    """
+    lines = [
+        f"✓ Rendered **{structure.name}** from {len(rendered)} angle(s).",
+        "",
+        f"📁 Saved to: {rendered[0].path.parent}",
+        "",
+        "Now look at them. If something is off, edit the operation responsible "
+        "with patch_operations — regenerating the whole structure would change "
+        "the parts that came out right.",
+    ]
+    content: list[TextContent | ImageContent] = [
+        TextContent(type="text", text="\n".join(lines))
+    ]
+    for index, shot in enumerate(rendered, start=1):
+        content.append(TextContent(
+            type="text",
+            text=(
+                f"**{index}. {shot.view.name}** — camera at bearing "
+                f"{shot.view.azimuth:g}°, {shot.view.elevation:g}° above the "
+                f"horizon · `{shot.path.name}`"
+            ),
+        ))
+        content.append(ImageContent(
+            type="image",
+            data=base64.b64encode(shot.png).decode("ascii"),
+            mimeType="image/png",
+        ))
+    return content
+
+
 @app.call_tool()
-async def call_tool(name: str, arguments: Any) -> list[TextContent]:
+async def call_tool(name: str, arguments: Any) -> list[TextContent | ImageContent]:
     """Handle tool calls."""
 
     if name == "get_build_style_guide":
@@ -773,6 +919,64 @@ open — later versions appear without a reload."""
                 type="text",
                 text=f"❌ Error showing structure: {type(e).__name__}: {str(e)}"
             )]
+
+    if name == "render_structure":
+        import asyncio
+
+        if arguments.get("structure_json") or arguments.get("json_file_path"):
+            try:
+                structure = _load_structure(arguments)
+            except (json.JSONDecodeError, FileNotFoundError, ValidationError, ValueError) as e:
+                return [TextContent(
+                    type="text",
+                    text=f"❌ Error: could not render structure - {str(e)}"
+                )]
+        else:
+            # Defaulting to what is on screen is what makes this callable bare in
+            # the middle of a revision, which is when it is wanted most.
+            on_screen = viewer_state.current()
+            if on_screen is None:
+                return [TextContent(
+                    type="text",
+                    text=(
+                        "❌ Error: nothing to render. Pass structure_json, or call "
+                        "show_structure first and then call this with no arguments."
+                    ),
+                )]
+            structure = on_screen
+
+        try:
+            views = select_views(arguments.get("count"), arguments.get("angles"))
+            output_dir = (
+                resolve_output_directory(arguments["output_directory"])
+                if arguments.get("output_directory")
+                else default_output_directory()
+            )
+            # A browser is neither fast nor async, and the stdio loop has to stay
+            # answerable while it works — the viewer's own HTTP server is serving
+            # the page being photographed from this same process.
+            rendered = await asyncio.to_thread(
+                render_views,
+                structure,
+                output_dir,
+                views=views,
+                width=int(arguments.get("width") or DEFAULT_WIDTH),
+                height=int(arguments.get("height") or DEFAULT_HEIGHT),
+            )
+        except RenderError as e:
+            # Already written for a reader who has to act on it; a traceback here
+            # would bury the install command that fixes the common case.
+            return [TextContent(type="text", text=f"❌ Error: {str(e)}")]
+        except StructureTooLargeError as e:
+            return [TextContent(type="text", text=f"❌ Error: structure too large - {str(e)}")]
+        except Exception as e:
+            _log(f"render_structure failed: {traceback.format_exc()}")
+            return [TextContent(
+                type="text",
+                text=f"❌ Error rendering structure: {type(e).__name__}: {str(e)}"
+            )]
+
+        return _render_result(structure, rendered)
 
     # "open_folder_in_explorer" kept as a backwards-compatible alias.
     if name in ("open_output_folder", "open_folder_in_explorer"):
