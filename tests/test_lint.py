@@ -196,6 +196,49 @@ def test_roof_matching_walls_is_noted():
     assert "roof-contrast" in _rules(findings)
 
 
+def _steep_roofed_longhouse():
+    """Nordic profile: three courses of wall under a 63-degree roof that takes
+    the other ten. The roof reaches well below half the build's height."""
+    ops = [
+        {"op": "cuboid", "start": [0, 0, 0], "end": [19, 0, 9], "block": "stone_bricks"},
+        {"op": "hollow_box", "start": [0, 1, 0], "end": [19, 3, 9],
+         "block": "spruce_planks", "floor": False, "ceiling": False},
+        {"op": "block", "pos": [3, 2, 0], "block": "lantern"},
+    ]
+    # Two courses of rise per course of run: z steps in by 1 every second y.
+    for i in range(10):
+        y, inset = 4 + i, i // 2
+        ops += [
+            {"op": "cuboid", "start": [-1, y, -1 + inset], "end": [20, y, -1 + inset],
+             "block": "dark_oak_planks"},
+            {"op": "cuboid", "start": [-1, y, 10 - inset], "end": [20, y, 10 - inset],
+             "block": "dark_oak_planks"},
+        ]
+    return MinecraftStructure(name="longhouse", operations=ops)
+
+
+def test_a_steep_roof_is_not_read_as_matching_the_walls():
+    """The bug this rule had: sampling the walls at a fixed fraction of the
+    height lands inside a roof this steep and compares it against itself."""
+    findings = lint_structure(_steep_roofed_longhouse())
+    assert "roof-contrast" not in _rules(findings)
+
+
+def test_a_roof_sharing_only_the_foundation_material_is_not_flagged():
+    """Stone footings under a stone-slab roof, with timber walls between: the
+    top and the base match, but nothing about the build is monochrome."""
+    ops = [
+        {"op": "cuboid", "start": [0, 0, 0], "end": [13, 1, 9], "block": "stone_bricks"},
+        {"op": "hollow_box", "start": [0, 2, 0], "end": [13, 7, 9],
+         "block": "oak_planks", "floor": False, "ceiling": False},
+        {"op": "cuboid", "start": [-1, 8, -1], "end": [14, 8, 10],
+         "block": "stone_brick_slab[type=top]"},
+        {"op": "block", "pos": [3, 4, 0], "block": "lantern"},
+    ]
+    findings = lint_structure(MinecraftStructure(name="footed", operations=ops))
+    assert "roof-contrast" not in _rules(findings)
+
+
 def test_block_spam_is_noted():
     structure = MinecraftStructure(
         name="spam",

@@ -52,6 +52,16 @@ PALETTE_DETAIL_SHARE = 0.05
 # has the primary at 59%; the prescribed split tops out at ~50.
 PALETTE_DOMINANCE = 0.55
 
+# Which slice of the height decides what the roof is made of.
+ROOF_BAND = 0.72
+
+# Walking that roof material back down to its eave needs two tolerances: it has
+# to hold this share of a course to still count as the roof there, and this many
+# consecutive courses may miss before the walk gives up. A ridge beam, a gable
+# end and a chimney all put a course of something else inside a roof.
+ROOF_COURSE_SHARE = 0.2
+ROOF_WALK_TOLERANCE = 2
+
 # Shape variants collapse into their material for palette purposes: a wall of
 # oak planks trimmed with oak stairs and oak slabs is one palette entry.
 _SHAPE_SUFFIXES = (
@@ -259,25 +269,61 @@ def _check_roof_contrast(solid: Dict[Coord, str]) -> List[Finding]:
     if span < 6:
         return []
 
-    def dominant(y_from: float, y_to: float) -> Optional[str]:
-        tally = Counter(
-            family(b) for (x, y, z), b in solid.items()
-            if y_from <= (y - low) / span < y_to and not is_light(b)
-        )
+    courses: Dict[int, Counter] = {}
+    for (_, y, _), block in solid.items():
+        if not is_light(block):
+            courses.setdefault(y, Counter())[family(block)] += 1
+
+    def dominant(band: Iterable[int]) -> Optional[str]:
+        tally: Counter = Counter()
+        for y in band:
+            tally.update(courses.get(y, ()))
         return tally.most_common(1)[0][0] if tally else None
 
-    # The wall band sits low on purpose: a pitched roof can occupy the whole
-    # upper half of a small build, and sampling there would compare the roof
-    # against itself.
-    roof = dominant(0.72, 1.01)
-    walls = dominant(0.15, 0.5)
-    if roof and walls and roof == walls:
-        return [Finding(
-            "roof-contrast", "info",
-            f"the top of the build is the same material as its middle ({roof}); "
-            "a roof that matches the walls does not read as a roof",
-        )]
-    return []
+    roof_from = low + int(span * ROOF_BAND)
+    roof = dominant(range(roof_from, high + 1))
+    if roof is None:
+        return []
+
+    # Follow the roof material down from its band to find the eave, rather than
+    # sampling the walls at a fixed height. A steep roof occupies most of a
+    # build, and its lower courses sit exactly where the walls were assumed to
+    # be — which reads as a roof matching its walls when it is only the roof
+    # matching itself.
+    eave, misses = roof_from, 0
+    for y in range(roof_from - 1, low - 1, -1):
+        course = courses.get(y)
+        if not course:
+            continue  # a light-only course decides nothing either way
+        if course[roof] >= sum(course.values()) * ROOF_COURSE_SHARE:
+            eave, misses = y, 0
+            continue
+        misses += 1
+        if misses > ROOF_WALK_TOLERANCE:
+            break
+
+    # The bottom course is the foundation, or the ground pad the build sits on,
+    # rather than a wall; between that and the eave is the only band that is.
+    walls = dominant(range(low + 1, eave))
+    if walls is None:
+        # The roof reaches the ground, so there is no wall band to compare
+        # against. Only one reading of that is safe: the same material runs
+        # from the ridge down, and it has to be most of the build for the
+        # rule to say so — a roof that merely shares a block with the
+        # foundation it stands on is not the anti-pattern.
+        above_base: Counter = Counter()
+        for y in range(low + 1, high + 1):
+            above_base.update(courses.get(y, ()))
+        if above_base[roof] * 2 <= sum(above_base.values()):
+            return []
+    elif walls != roof:
+        return []
+
+    return [Finding(
+        "roof-contrast", "info",
+        f"the top of the build is the same material as the wall below it "
+        f"({roof}); a roof that matches the walls does not read as a roof",
+    )]
 
 
 def _check_block_spam(structure: MinecraftStructure) -> List[Finding]:
