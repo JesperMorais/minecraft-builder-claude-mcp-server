@@ -23,6 +23,10 @@ An MCP (Model Context Protocol) server that enables Claude to generate Minecraft
 - **Point at what's wrong** — click a block or box a region in the viewer, attach
   a note, and Claude edits the *operation* that built it rather than regenerating
   the whole structure (see [Marking up a build](#marking-up-a-build))
+- **Claude can see its own builds** — `render_structure` screenshots the viewer
+  headlessly and hands the images back to the model, so it can review its work
+  and fix what looks wrong before you have to say so (see
+  [Seeing the build](#seeing-the-build))
 - WorldEdit-compatible `.schem` and Litematica-native `.litematic` output, so a
   build can be pasted instantly *or* built by hand in survival against a
   hologram (see [Importing into Minecraft](#importing-into-minecraft))
@@ -162,6 +166,16 @@ See `examples/PROMPTS.md` for more detailed examples and tips.
 - Orbit/pan/zoom, a block legend, and a **colour by operation** toggle that
   shows which shape operation placed each block
 - Blocks are flat colours, not Minecraft textures (see [3D viewer](#3d-viewer))
+
+**render_structure** - Screenshots the build and hands the pictures to Claude
+- The only tool whose output is *for the model*: `show_structure` shows the user,
+  this one lets Claude see what it made and fix what is wrong
+- Five 800x600 PNGs by default — four isometric corners and one level elevation
+- Angles are compass bearings for where the camera stands (0 north, 90 east),
+  matching Minecraft's own compass; pass `count` or explicit `angles`
+- Drives the real viewer headlessly, so the pictures are what you would see; it
+  never changes the version on your screen
+- Needs the optional render extra (see [Seeing the build](#seeing-the-build))
 
 **reply** - Sends a message back to the viewer's chat
 - Used when a prompt arrived from the browser rather than the terminal
@@ -332,6 +346,50 @@ The viewer binds `127.0.0.1` only, so nothing outside your machine can reach it.
 It needs an internet connection on first load, because three.js is fetched from a
 CDN; to run fully offline, vendor `three.module.js` and `OrbitControls.js` next to
 `web/static/index.html` and point its import map at them.
+
+### Seeing the build
+
+The 3D viewer shows *you* the build. `render_structure` shows **Claude** the
+build: it drives that same viewer in a headless Chromium, screenshots it from
+several angles and returns the PNGs as images, so the model can look at its own
+work and revise it.
+
+```
+Build a windmill, then render it and tell me what you got wrong
+```
+
+Five 800x600 views by default — four isometric corners and one level elevation —
+written to a temp folder and handed back inline. Ask for `count` if you want
+fewer, or specific `angles` (`azimuth` is a compass bearing for where the camera
+stands, `elevation` is degrees above the horizon). Rendering is read-only: it
+serves the structure straight to the headless page, so the version you have on
+screen and any notes you have not applied are left alone.
+
+**With the extra installed, looking becomes the default build flow.** Every
+render comes back with a six-point visual critique — silhouette, palette, depth,
+roofline, light, grounding — and the server asks Claude to answer it against the
+images, fix the worst single fault with `patch_operations`, and render again, for
+up to three rounds. It is the counterpart to the style linter: the linter reports
+what it can count from the JSON, the critique asks what only the picture can
+answer, and one fix per round is what makes the next critique mean anything.
+
+Two things the loop deliberately will not do. It **stops the moment you say
+something or start marking up the build** — your notes outrank the model's own
+opinion, and a revision landing mid-annotation would repoint the note you are
+writing. And none of that guidance exists without the extra installed, so a
+default install is never steered toward a tool that would only tell it to install
+a browser.
+
+It is an optional extra, because it brings a browser with it:
+
+```bash
+pip install -e ".[render]"
+playwright install chromium
+```
+
+Without it every other tool works as before and `render_structure` returns those
+two commands instead of a picture. Rendering needs network access on first load
+for the same reason the viewer does — three.js comes from a CDN.
 
 ### Chatting from the viewer
 
@@ -542,6 +600,8 @@ minecraft-builder-claude-mcp-server/
 │   │   ├── prompts.py       # Prompt queue for polling mode (await_prompt)
 │   │   ├── annotations.py   # Build markup, resolved to operations
 │   │   ├── chat.py          # Transcript + SSE event bus
+│   │   ├── render.py        # Headless screenshots of the viewer
+
 │   │   ├── __main__.py      # Run the viewer standalone
 │   │   └── static/          # index.html, viewer.js, style.css
 │   └── data/
@@ -649,12 +709,38 @@ ruff check src tests
 mypy src/minecraft_builder
 ```
 
+### Measuring build quality
+
+Changes to the style guide, the tool prompts or the linter are all arguments
+about what makes a build good, and none of them can tell you whether the output
+actually improved. The eval harness can: it renders a fixed set of fourteen
+benchmark builds and scores them against a fixed rubric, so the same question
+can be asked before and after a change.
+
+```bash
+python -m minecraft_builder.evals --list                      # the prompts
+python -m minecraft_builder.evals --structures examples/eval  # render a bundle
+```
+
+Scoring is by hand from the bundle, or automatic with a vision model behind the
+`eval` extra (opt-in — it costs money). See [docs/EVAL.md](docs/EVAL.md).
+
 ## Dependencies
 
 - **mcp** (>=0.9.0) - MCP Python SDK
 - **mcschematic** (>=11.0.0) - `.schem` (Sponge Schematic v2) writing
 - **litemapy** (>=0.11.0b0,<0.12) - `.litematic` (Litematica) writing
 - **pydantic** (>=2.0.0) - Data validation
+
+Optional, in the `render` extra:
+
+- **playwright** (>=1.40) - Headless Chromium for `render_structure`. Also needs
+  `playwright install chromium`; nothing else depends on it
+
+Optional, in the `eval` extra:
+
+- **anthropic** (>=0.40) - Vision-model scoring for the eval harness. Only the
+  `--judge` path uses it; rendering and manual scoring work without it
 
 ## Contributing
 

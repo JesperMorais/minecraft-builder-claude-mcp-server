@@ -6,6 +6,100 @@ based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **An eval harness, so build-quality changes can be measured instead of
+  argued.** The style guide, the linter and the visual critique are all claims
+  about what makes a build good, and none of them could tell you whether editing
+  one of them improved the output. `python -m minecraft_builder.evals` renders a
+  fixed set of fourteen benchmark builds and scores them against a fixed rubric,
+  so the same question can be asked before and after a change and the two
+  answers compared. See `docs/EVAL.md`.
+
+  It deliberately does not generate the builds — a model does that through the
+  usual tools, and the harness consumes the structure JSON. What gets measured
+  is therefore the pipeline the model actually runs inside, not a
+  reimplementation of it that would drift and quietly measure nothing.
+
+  `data/build_rubric.md` is the single source of truth for scoring: the six
+  dimensions are *parsed out of its headings*, and the same text is handed to
+  the judge verbatim, so the document a human scores against and the
+  instructions the judge follows cannot disagree. Adding a dimension is a
+  documentation edit.
+
+  Automatic judging is behind the `eval` extra and an explicit `--judge` flag —
+  one API request per build, so a harness that scored by default would be run
+  once and then avoided. The judge sees the rubric and the renders and nothing
+  else; one that could read the structure JSON would be scoring the description
+  of the build and would reward a model for claiming a plinth it never rendered.
+  Without the extra the harness still writes the render bundle and a report with
+  an empty score table, and says how to enable judging.
+
+  Every failure is one row rather than the run: a missing structure, an
+  unrenderable build or a rate-limited judge lands in that build's `error` and
+  is excluded from the means — never scored zero, which would report a quality
+  regression where there was a missing file. `scores.json` records the benchmark
+  set's fingerprint and the judge model, because two runs are only comparable if
+  they asked the same questions of the same judge.
+- **The review loop: render, critique, patch, repeat.** Having a tool that
+  returns pictures is not the same as using it, so the loop is now the path the
+  server steers toward — in the system prompt, in the export tool's description,
+  and in the result text of everything that produces a build, which is where the
+  advice is actually actionable. Three rounds is the stated budget; builds
+  improve sharply for two or three passes and then stop.
+
+  Every render returns a six-point visual critique (`VISUAL_CRITIQUE_CHECKLIST`
+  in `style.py`) covering silhouette, palette, depth, roofline, light and
+  grounding. It is phrased as what to *look* for rather than what to count,
+  because `lint.py` already counts and reports everything it can reach from the
+  JSON — what it cannot see is whether the result looks right. A build can
+  satisfy the palette ratio and still read as one grey slab, or place its
+  lanterns correctly and hide every one behind a roof overhang. The rubric asks
+  for one fix per round on purpose: fixing everything at once means not knowing
+  which edit helped.
+
+  **The loop yields to the human.** It stops as soon as the user says anything or
+  starts marking up the build, because a revision landing mid-annotation
+  repoints the note they are writing — the same failure annotations resolve at
+  creation time to avoid. Renders still never touch `ViewerState`.
+
+  **None of this guidance appears without the render extra installed.**
+  `rendering_available()` probes once at startup with `find_spec`, and the
+  instructions, the export tool's description and the build results all drop
+  their render step when it comes back false. Guidance naming an uninstalled tool
+  is worse than no guidance: it would arrive on every single build, and the fix
+  is a browser download the user may have declined deliberately. The tool itself
+  stays listed either way, so the feature is discoverable and can explain its own
+  install.
+- **`render_structure`: Claude can see its own builds.** Every other feedback
+  path in this server describes a build in words — ASCII slices, block counts, a
+  style verdict. This one photographs it. A headless Chromium loads the real
+  viewer with `?render=1`, the tool aims the camera at four isometric corners and
+  one level elevation, and the PNGs come back as MCP image content, so the model
+  reviews what it actually made rather than what it meant to emit.
+
+  It drives the existing viewer rather than shipping a renderer of its own: a
+  second renderer would be a second thing to keep in step with `viewer.js`, and
+  every disagreement between them would be invisible — the model would be
+  reviewing a picture the user never sees. The structure reaches the page by
+  intercepting its `/api/structure` fetch instead of going through
+  `ViewerState`, so taking a picture cannot bump the version, replace what the
+  user is looking at, or repoint a note they have not applied yet.
+
+  Angles are compass bearings for where the camera stands, matching Minecraft's
+  own compass (0 = north = -Z, 90 = east = +X), and the framing maths lives in
+  Python so it can be tested without a browser. `count` takes a prefix of the
+  standard set — ordered so one image is the corner the viewer opens at, two add
+  the elevation, three show the back — or pass explicit `angles`. With no
+  structure argument it renders whatever `show_structure` last displayed.
+
+  Playwright is an optional extra (`pip install ".[render]"`), because it brings
+  a browser with it. Missing library, missing browser and an unreachable CDN each
+  come back as one sentence naming the command that fixes it; nothing else in the
+  server is affected by its absence.
+
+  Render mode also stops the viewer's animation loop and turns on
+  `preserveDrawingBuffer`. Chromium software-rasterises every frame here, so an
+  idle loop leaves each screenshot queueing behind it for the one thread doing
+  the work — dropping it took a five-view render from 45 seconds to 7.
 - **The annotation loop (Phase 3).** Mark up a build in the viewer and have
   Claude act on it. Tick *Mark up the build*, click a block or Shift-click two
   blocks to box a region, and attach a note; notes collect in a tray with an

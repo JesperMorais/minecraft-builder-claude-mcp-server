@@ -401,6 +401,17 @@ body.annotating #scene { cursor: crosshair; }
 
 #status.error { color: #ff9b9b; }
 
+/* Headless screenshot mode (?render=1): canvas only, so what the render tool
+   captures is the build and nothing else. Everything hidden here is chat, notes
+   or diagnostics — it belongs to the user, and none of it means anything in a
+   still handed back to a model for review. */
+body.render-mode #hud,
+body.render-mode #panel,
+body.render-mode #chat,
+body.render-mode #notes,
+body.render-mode #note-composer,
+body.render-mode #status { display: none; }
+
 /* Light terminals exist too; keep the page legible in either theme. */
 @media (prefers-color-scheme: light) {
   :root {

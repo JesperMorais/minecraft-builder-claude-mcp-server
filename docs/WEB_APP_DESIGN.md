@@ -1,6 +1,7 @@
 # Design: Web UI for Minecraft Builder
 
-**Status:** Phases 0–3 built; Phase 4 not started (§13 has the current state)
+**Status:** Phases 0–3 built, plus headless rendering (§14); Phase 4 not started
+(§13 has the current state)
 **Date:** 2026-07-27, revised 2026-07-28
 
 Two stages, deliberately ordered:
@@ -369,6 +370,7 @@ src/minecraft_builder/          # core stays importable and framework-free
     ├── chat.py                 # transcript + SSE event bus
     ├── state.py                # structure versions
     ├── payload.py              # voxel payload + occlusion culling
+    ├── render.py               # headless screenshots of the viewer (§14)
     └── static/                 # index.html · viewer.js · style.css
 ```
 
@@ -655,6 +657,49 @@ material list, format picker, import instructions per format.
 
 ---
 
+## 14. Rendering for the model (`web/render.py`)
+
+Unplanned, and it closes a gap the rest of the design left open. Phases 1–3 all
+point the same way: the *user* can see the build, and the model cannot. §7 even
+opens by asking whether flat colours are enough "to judge a build" — a question
+only the person at the browser was ever in a position to answer.
+
+`render_structure` drives the viewer in a headless Chromium and returns PNGs as
+MCP image content, so the model reviews its own work before the user has to.
+
+Four decisions, each the opposite of the obvious implementation:
+
+- **Drive the real page, not a renderer of our own.** `?render=1` hides the
+  chrome, drops the live connections and exposes `window.mcbRender`. A dedicated
+  offscreen renderer would be a second thing to keep in step with `viewer.js`,
+  and its disagreements would be invisible: the model would review a picture the
+  user never sees. §12's "own three.js renderer" reasoning applies twice over
+  here.
+- **Serve the payload, do not store it.** The driver answers `/api/structure`
+  itself. Pushing through `ViewerState` works and is wrong — it would bump the
+  version, replace what the user is looking at, and repoint every note not yet
+  applied (§8: resolution happens at creation, and a silent revision underneath
+  it is exactly the failure that rule exists to prevent).
+- **Framing maths in Python, a dumb camera in the browser.** The page is handed
+  a position and a target. This is the part where a mistake produces five
+  plausible pictures of the wrong thing, so it is the part that has to be
+  testable without a browser.
+- **No animation loop in render mode.** Chromium has no GPU here and
+  software-rasterises every frame, so an idle `requestAnimationFrame` loop leaves
+  each screenshot queueing behind it: 45 seconds for five views, against 7 with
+  the loop stopped and `preserveDrawingBuffer` on. The reverse of what is right
+  for an interactive page, which is why it is conditional rather than a change to
+  the viewer.
+
+Playwright is an optional extra. The CDN import map (§7) is now load-bearing for
+a *tool*, not just for the user's page, so an offline machine gets a page that
+loads, runs nothing and reports nothing — `_explain_stall()` watches
+`requestfailed` and names that specific cause rather than timing out mutely.
+Vendoring three.js would remove the last network dependency and is the obvious
+next move if rendering is ever wanted offline or in CI.
+
+---
+
 ## Appendix: decisions and rationale
 
 | Decision | Rationale |
@@ -671,6 +716,8 @@ material list, format picker, import instructions per format.
 | Operations JSON as source of truth | Schematics are compiled output; editing JSON is what makes revision cheap and diffable. |
 | Own three.js renderer | No asset-licensing problem, no thin dependency in the critical path. |
 | Operation provenance for annotations | Turns vague dissatisfaction into a targeted single-operation edit. |
+| **Screenshot the real viewer instead of rendering separately** | A second renderer is a second thing to keep in step with `viewer.js`, and a divergence would be silent — the model would review a picture the user never sees. Costs a browser dependency, which is why it is an optional extra. |
+| **Rendering never touches `ViewerState`** | Asking for a picture must not bump the version, replace what is on screen, or repoint an unapplied note. The payload is served to the headless page instead. |
 | `patch_operations` alongside `show_structure` | "Make the roof steeper" costs one op edit, not a 200-op rewrite. |
 | Batched "Apply notes" | Mid-turn events are grouped by Claude Code anyway, and users batch objections naturally. |
 | Flat colours default even locally | Keeps Stage 2 legal and Phase 1 cheap; local jar extraction is an opt-in extra. |
